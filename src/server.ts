@@ -6,8 +6,8 @@ import { logger } from "./lib/logger.js";
 import { wrapError, getUserMessage } from "./lib/errors.js";
 import { handleGitHubWebhook } from "./github/webhook.js";
 import { retrieveContext } from "./retrieval/retrieve.js";
-import { generateAnswer } from "./answer/generate.js";
-import type { SlackContext, AnswerResult } from "./types/index.js";
+import { generateAnswer, type GenerateResult } from "./answer/generate.js";
+import type { SlackContext } from "./types/index.js";
 
 // ============================================
 // Slack App Setup
@@ -45,8 +45,18 @@ interface SlackEventContext {
 
 interface SlackClient {
   chat: {
-    postMessage: (params: { channel: string; thread_ts: string; text: string }) => Promise<{ ts: string }>;
-    update: (params: { channel: string; ts: string; text: string }) => Promise<void>;
+    postMessage: (params: {
+      channel: string;
+      thread_ts: string;
+      text: string;
+      blocks?: unknown[];
+    }) => Promise<{ ts: string }>;
+    update: (params: {
+      channel: string;
+      ts: string;
+      text: string;
+      blocks?: unknown[];
+    }) => Promise<void>;
   };
 }
 
@@ -59,6 +69,7 @@ interface RecentAnswer {
   requestId: string;
   question: string;
   isConfident: boolean;
+  confidence: string;
   chunkCount: number;
   avgSimilarity: number;
   latencyMs: number;
@@ -78,7 +89,7 @@ async function answerQuestion(
   question: string,
   userId: string,
   slackContext: Partial<SlackContext>
-): Promise<AnswerResult> {
+): Promise<GenerateResult> {
   const retrieval = await retrieveContext(question);
   const result = await generateAnswer(question, retrieval, userId, slackContext);
 
@@ -88,6 +99,7 @@ async function answerQuestion(
     requestId: result.requestId,
     question: question.slice(0, 100),
     isConfident: result.isConfident,
+    confidence: result.confidence,
     chunkCount: retrieval.chunks.length,
     avgSimilarity: result.avgSimilarity,
     latencyMs: result.latencyMs,
@@ -127,10 +139,12 @@ slackApp.event("app_mention", async ({ event, client, context }: { event: unknow
 
     const result = await answerQuestion(userText, e.user, slackContext);
 
+    // Send Block Kit formatted response
     await slackClient.chat.update({
       channel: e.channel,
       ts: pendingTs,
-      text: result.answer,
+      text: result.slackMessage.text,
+      blocks: result.slackMessage.blocks,
     });
   } catch (err) {
     const appError = wrapError(err);
@@ -177,10 +191,12 @@ slackApp.message(async ({ message, client, context }: { message: unknown; client
 
     const result = await answerQuestion((m.text || "").trim(), m.user, slackContext);
 
+    // Send Block Kit formatted response
     await slackClient.chat.update({
       channel: m.channel,
       ts: pendingTs,
-      text: result.answer,
+      text: result.slackMessage.text,
+      blocks: result.slackMessage.blocks,
     });
   } catch (err) {
     const appError = wrapError(err);
@@ -197,6 +213,30 @@ slackApp.message(async ({ message, client, context }: { message: unknown; client
       await slackClient.chat.postMessage({ channel: m.channel, thread_ts: threadTs, text: errorMsg }).catch(() => {});
     }
   }
+});
+
+// ============================================
+// Feedback Action Handlers
+// ============================================
+
+slackApp.action("feedback_helpful", async ({ ack, body, client }: { ack: () => Promise<void>; body: unknown; client: unknown }) => {
+  await ack();
+  const actionBody = body as { actions?: Array<{ value?: string }>; user?: { id?: string } };
+  const requestId = actionBody.actions?.[0]?.value;
+  const userId = actionBody.user?.id;
+
+  logger.info("Feedback received: helpful", { stage: "slack", requestId, userId });
+  // TODO: Store feedback in database
+});
+
+slackApp.action("feedback_not_helpful", async ({ ack, body, client }: { ack: () => Promise<void>; body: unknown; client: unknown }) => {
+  await ack();
+  const actionBody = body as { actions?: Array<{ value?: string }>; user?: { id?: string } };
+  const requestId = actionBody.actions?.[0]?.value;
+  const userId = actionBody.user?.id;
+
+  logger.info("Feedback received: not helpful", { stage: "slack", requestId, userId });
+  // TODO: Store feedback in database
 });
 
 // ============================================

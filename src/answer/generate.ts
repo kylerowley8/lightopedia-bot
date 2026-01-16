@@ -3,33 +3,40 @@ import crypto from "crypto";
 import { config } from "../config/env.js";
 import { logger, createRequestLogger } from "../lib/logger.js";
 import { supabase } from "../db/supabase.js";
-import { LIGHTOPEDIA_SYSTEM_PROMPT, RUNTIME_DIRECTIVES } from "../prompts/lightopediaSystem.js";
-import { formatSources } from "../retrieval/retrieve.js";
-import type { RetrievalResult, SlackContext, AnswerResult, ConfidenceLevel } from "../types/index.js";
-
-// Re-export for backward compatibility
-export type { AnswerResult };
+import {
+  LIGHTOPEDIA_SYSTEM_PROMPT,
+  JSON_OUTPUT_PROMPT,
+  RUNTIME_DIRECTIVES,
+  LOW_CONFIDENCE_MESSAGE,
+} from "../prompts/lightopediaSystem.js";
+import {
+  renderAnswer,
+  renderLowConfidenceResponse,
+  renderPlainText,
+  type SlackMessage,
+} from "../slack/renderAnswer.js";
+import { parseAnswerPayload, buildSources, type AnswerPayload } from "../types/answer.js";
+import type { RetrievalResult, SlackContext, ConfidenceLevel } from "../types/index.js";
 
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
-const LOW_CONFIDENCE_RESPONSE = `I don't see this covered in the current docs or code.
-
-If this is something you think Light should support, the best next step is to submit a **Feature Request** so the Product team can review it.
-
-**How to submit a feature request:**
-1. Hover over this message
-2. Click **"…" → "Create Issue in Linear"**
-3. Select **Product Team** (not Product Delivery Team)
-4. Choose the **Feature Request** template
-
-Feature requests are reviewed by the Product team during regular triage (10am and 2pm UK time).`;
+export interface GenerateResult {
+  requestId: string;
+  slackMessage: SlackMessage;
+  payload: AnswerPayload | null;
+  isConfident: boolean;
+  confidence: ConfidenceLevel;
+  chunkIds: string[];
+  avgSimilarity: number;
+  latencyMs: number;
+}
 
 export async function generateAnswer(
   question: string,
   retrieval: RetrievalResult,
   userId: string,
   slackContext: Partial<SlackContext>
-): Promise<AnswerResult> {
+): Promise<GenerateResult> {
   const requestId = crypto.randomUUID().slice(0, 8);
   const log = createRequestLogger(requestId, "synthesize");
   const startTime = Date.now();
@@ -45,13 +52,14 @@ export async function generateAnswer(
     ...slackContext,
   });
 
+  // Handle low-confidence retrieval
   if (!retrieval.isConfident) {
     const latencyMs = Date.now() - startTime;
 
     await logQA({
       requestId,
       question,
-      answer: LOW_CONFIDENCE_RESPONSE,
+      payload: LOW_CONFIDENCE_MESSAGE,
       chunkIds,
       confidence: "low",
       latencyMs,
@@ -62,7 +70,8 @@ export async function generateAnswer(
 
     return {
       requestId,
-      answer: `${LOW_CONFIDENCE_RESPONSE}\n\n_Request ID: ${requestId}_`,
+      slackMessage: renderLowConfidenceResponse(requestId),
+      payload: LOW_CONFIDENCE_MESSAGE,
       isConfident: false,
       confidence: "low",
       chunkIds,
@@ -72,6 +81,7 @@ export async function generateAnswer(
   }
 
   // Build context with source attribution
+  const sources = buildSources(retrieval.chunks);
   const context = retrieval.chunks
     .map((c, i) => {
       const source = c.metadata.source || "unknown";
@@ -85,10 +95,12 @@ ${question}
 CONTEXT (use as the only source of truth):
 ${context}`;
 
+  // Request structured JSON output
   const response = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [
       { role: "system", content: LIGHTOPEDIA_SYSTEM_PROMPT },
+      { role: "system", content: JSON_OUTPUT_PROMPT },
       { role: "system", content: RUNTIME_DIRECTIVES },
       { role: "user", content: userMessage },
     ],
@@ -96,33 +108,61 @@ ${context}`;
     max_tokens: 1000,
   });
 
-  const rawAnswer = response.choices[0]?.message?.content || "Unable to generate answer.";
-  const sources = formatSources(retrieval.chunks);
-  const answer = `${rawAnswer}${sources}\n\n_Request ID: ${requestId}_`;
-
+  const rawAnswer = response.choices[0]?.message?.content || "";
   const latencyMs = Date.now() - startTime;
-  const confidence: ConfidenceLevel = retrieval.avgSimilarity >= 0.6 ? "high" : "medium";
+
+  // Parse structured output
+  let payload = parseAnswerPayload(rawAnswer);
+  let slackMessage: SlackMessage;
+
+  if (payload) {
+    // Enrich sources with proper data from retrieval
+    payload = {
+      ...payload,
+      sources: sources.map((s, i) => ({
+        ...s,
+        id: i + 1,
+      })),
+    };
+
+    slackMessage = renderAnswer(payload, requestId);
+    log.info("Generated structured answer", {
+      latencyMs,
+      confidence: payload.confidence,
+      bulletCount: payload.bullets.length,
+    });
+  } else {
+    // Fallback to plain text if JSON parsing fails
+    log.warn("Failed to parse structured output, using plain text fallback", {
+      rawLength: rawAnswer.length,
+    });
+
+    slackMessage = renderPlainText(rawAnswer, requestId, sources);
+    payload = {
+      summary: rawAnswer.slice(0, 200),
+      bullets: [],
+      sources,
+      confidence: retrieval.avgSimilarity >= 0.6 ? "high" : "medium",
+    };
+  }
+
+  const confidence = payload.confidence;
 
   await logQA({
     requestId,
     question,
-    answer: rawAnswer,
+    payload,
     chunkIds,
     confidence,
     latencyMs,
     slackContext,
   });
 
-  log.info("Answer generated", {
-    latencyMs,
-    answerLength: rawAnswer.length,
-    confidence,
-  });
-
   return {
     requestId,
-    answer,
-    isConfident: true,
+    slackMessage,
+    payload,
+    isConfident: confidence !== "low",
     confidence,
     chunkIds,
     avgSimilarity: retrieval.avgSimilarity,
@@ -133,7 +173,7 @@ ${context}`;
 interface LogQAParams {
   requestId: string;
   question: string;
-  answer: string;
+  payload: AnswerPayload;
   chunkIds: string[];
   confidence: ConfidenceLevel;
   latencyMs: number;
@@ -147,7 +187,7 @@ async function logQA(params: LogQAParams): Promise<void> {
       slack_channel_id: params.slackContext.channelId,
       slack_thread_ts: params.slackContext.threadTs,
       question: params.question,
-      answer: params.answer,
+      answer: JSON.stringify(params.payload),
       citations: params.chunkIds,
       confidence: params.confidence,
       latency_ms: params.latencyMs,
