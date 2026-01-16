@@ -44,7 +44,14 @@ When CONVERSATION HISTORY is provided:
 - Use it to understand context and resolve pronouns ("it", "that", "this")
 - If the user asks "what about X?" or "how does that work?", refer back to the previous topic
 - Don't repeat information already covered unless asked to clarify
-- If a follow-up question is unrelated to the conversation, answer it fresh`;
+- If a follow-up question is unrelated to the conversation, answer it fresh
+
+## When Context Is Missing
+If the provided context does not answer the user's question:
+- Do not speculate or invent behavior
+- Do not include citations or a Sources section
+- Ask for clarifying context when appropriate
+- Provide guidance on submitting a Feature Request via Linear in a calm, conversational tone`;
 
 export const JSON_OUTPUT_PROMPT = `You MUST respond with valid JSON in this exact format:
 
@@ -82,98 +89,38 @@ export const RUNTIME_DIRECTIVES = `Additional runtime rules:
 - Stay concise — most answers should be under 150 words total`;
 
 // ============================================
-// Low confidence responses (context-specific)
+// Missing context fallback (single, unified response)
 // ============================================
 
+/**
+ * Returns the canonical fallback message when no relevant context is found.
+ * This is the ONLY fallback path - do not create alternatives.
+ */
+export function missingContextFallback(requestId: string): string {
+  return `Hmm, I'm not finding anything on this in the docs or code I have indexed. Can you tell me a bit more about what you're trying to do? I might be able to help if I understand the context better.
+
+If this turns out to be a gap in Light's docs or a feature we should add, feel free to submit a Feature Request in Linear (hover → "…" → "Create Issue in Linear" → Product Team → Feature Request).
+
+_${requestId}_`;
+}
+
+// Legacy types kept for backward compatibility
 export type LowConfidenceReason =
   | "no_results"
   | "low_similarity"
   | "low_relevance"
   | "ambiguous_question";
 
-/** Get context-specific low-confidence message */
-export function getLowConfidenceMessage(reason: LowConfidenceReason) {
-  const messages: Record<LowConfidenceReason, typeof LOW_CONFIDENCE_MESSAGE_DEFAULT> = {
-    no_results: {
-      summary: "I couldn't find any documentation matching this question.",
-      bullets: [
-        {
-          text: "Try rephrasing with different terms (e.g., 'invoices' instead of 'bills', 'OCR' instead of 'scanning').",
-          citations: [],
-        },
-        {
-          text: "If this is a feature you need, submit a Feature Request via Linear.",
-          citations: [],
-        },
-      ],
-      sources: [],
-      confidence: "low" as const,
-    },
-    low_similarity: {
-      summary: "I found some related content, but it doesn't clearly answer this question.",
-      bullets: [
-        {
-          text: "The documentation I found discusses related topics but not this specific question.",
-          citations: [],
-        },
-        {
-          text: "Try asking about a more specific aspect, or check with the team directly.",
-          citations: [],
-        },
-      ],
-      sources: [],
-      confidence: "low" as const,
-    },
-    low_relevance: {
-      summary: "The search results weren't relevant enough to answer confidently.",
-      bullets: [
-        {
-          text: "I found documentation but it doesn't address your specific question.",
-          citations: [],
-        },
-        {
-          text: "Consider rephrasing or breaking this into smaller, more specific questions.",
-          citations: [],
-        },
-      ],
-      sources: [],
-      confidence: "low" as const,
-    },
-    ambiguous_question: {
-      summary: "This question is too broad for me to answer accurately.",
-      bullets: [
-        {
-          text: "Try being more specific about what aspect of Light you're asking about.",
-          citations: [],
-        },
-        {
-          text: "For example: 'How does Light handle invoice approval?' instead of 'How does billing work?'",
-          citations: [],
-        },
-      ],
-      sources: [],
-      confidence: "low" as const,
-    },
-  };
-
-  return messages[reason];
+/** @deprecated Use missingContextFallback instead */
+export function getLowConfidenceMessage(_reason: LowConfidenceReason) {
+  // All reasons now return the same unified message structure
+  return LOW_CONFIDENCE_MESSAGE;
 }
 
-/** Default low confidence message (backward compatible) */
+/** @deprecated Use missingContextFallback instead */
 export const LOW_CONFIDENCE_MESSAGE = {
-  summary: "I don't see this covered in the current docs or code.",
-  bullets: [
-    {
-      text: "If this is something you think Light should support, submit a Feature Request via Linear.",
-      citations: [],
-    },
-    {
-      text: "Hover over this message, click '…' → 'Create Issue in Linear', select Product Team, choose Feature Request template.",
-      citations: [],
-    },
-  ],
+  summary: "I don't see this answered in the current docs or code I have indexed.",
+  bullets: [],
   sources: [],
   confidence: "low" as const,
 };
-
-const LOW_CONFIDENCE_MESSAGE_DEFAULT = LOW_CONFIDENCE_MESSAGE;

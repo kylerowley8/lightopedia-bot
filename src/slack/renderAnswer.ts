@@ -205,6 +205,22 @@ Feature requests are reviewed by the Product team during regular triage.`;
   };
 }
 
+/** Render the canonical fallback message when no context is found */
+export function renderFallbackMessage(text: string): SlackMessage {
+  return {
+    blocks: [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: sanitizeMarkdown(text),
+        },
+      },
+    ],
+    text: text.slice(0, 200), // Notification fallback
+  };
+}
+
 /** Render plain text fallback (when structured output fails) */
 export function renderPlainText(text: string, requestId: string, sources?: Source[]): SlackMessage {
   const blocks: Block[] = [

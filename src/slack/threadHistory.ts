@@ -73,10 +73,11 @@ export async function getThreadHistory(
       if (!msg.text) continue;
 
       // Determine if this is a bot message
+      // Priority: explicit bot_id > our bot's user ID > subtype fallback
       const isBotMessage =
         msg.bot_id !== undefined ||
-        BOT_MESSAGE_SUBTYPES.includes(msg.subtype || "") ||
-        (botUserId && msg.user === botUserId);
+        (botUserId !== undefined && msg.user === botUserId) ||
+        BOT_MESSAGE_SUBTYPES.includes(msg.subtype || "");
 
       // Clean the message text (remove bot mentions)
       const cleanText = msg.text.replace(/<@[^>]+>\s*/g, "").trim();
@@ -98,13 +99,14 @@ export async function getThreadHistory(
     // It's a follow-up if there are previous messages in the thread
     const isFollowUp = recentMessages.length > 0;
 
-    logger.debug("Fetched thread history", {
+    logger.info("Fetched thread history", {
       stage: "slack",
       channel,
       threadTs,
       totalMessages: messages.length,
       includedMessages: recentMessages.length,
       isFollowUp,
+      hasBotUserId: botUserId !== undefined,
     });
 
     return {

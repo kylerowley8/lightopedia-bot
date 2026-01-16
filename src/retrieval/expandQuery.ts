@@ -18,8 +18,12 @@ IMPORTANT - Light uses specific terminology. Include synonyms where appropriate:
 - "vendors" → also use "suppliers"
 - "payments" → also use "payment runs", "AP", "accounts payable"
 - "customers" → also use "accounts", "AR", "accounts receivable"
+- "contacts" → use "customers" (Light calls contacts "customers"), also "create customer", "customer API"
+- "import" → also use "create", "bulk create", "API", "sync", "CSV upload"
 - "GAAP" → also use "accounting standards", "US GAAP", "reporting"
 - "IFRS" → also use "international standards", "accounting standards", "reporting"
+- "expenses" → also use "reimbursements", "card transactions", "receipts"
+- "approval" → also use "workflow", "approval workflow", "approver"
 
 Example:
 Question: "How does Light handle bill scanning?"

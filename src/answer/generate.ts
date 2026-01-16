@@ -7,13 +7,12 @@ import {
   LIGHTOPEDIA_SYSTEM_PROMPT,
   JSON_OUTPUT_PROMPT,
   RUNTIME_DIRECTIVES,
-  getLowConfidenceMessage,
-  type LowConfidenceReason,
+  missingContextFallback,
 } from "../prompts/lightopediaSystem.js";
 import {
   renderAnswer,
-  renderLowConfidenceResponse,
   renderPlainText,
+  renderFallbackMessage,
   type SlackMessage,
 } from "../slack/renderAnswer.js";
 import {
@@ -65,30 +64,40 @@ export async function generateAnswer(
     ...slackContext,
   });
 
-  // Handle low-confidence retrieval with context-specific messages
+  // Handle low-confidence retrieval with unified fallback
   if (!retrieval.isConfident) {
     const latencyMs = Date.now() - startTime;
+    const fallbackText = missingContextFallback(requestId);
 
-    // Determine reason for low confidence
-    const reason = determineLowConfidenceReason(retrieval);
-    const lowConfMessage = getLowConfidenceMessage(reason);
+    // Create minimal payload for logging
+    const fallbackPayload = {
+      summary: "I don't see this answered in the current docs or code I have indexed.",
+      bullets: [],
+      sources: [],
+      confidence: "low" as const,
+    };
 
     await logQA({
       requestId,
       question,
-      payload: lowConfMessage,
+      payload: fallbackPayload,
       chunkIds,
       confidence: "low",
       latencyMs,
       slackContext,
     });
 
-    log.info("Returned low-confidence response", { latencyMs, reason });
+    log.info("Returned fallback response (no confident context)", {
+      latencyMs,
+      chunkCount: retrieval.chunks.length,
+      avgSimilarity: retrieval.avgSimilarity.toFixed(3),
+    });
 
+    // Return plain text fallback - no structured answer, no citations
     return {
       requestId,
-      slackMessage: renderLowConfidenceResponse(requestId, lowConfMessage),
-      payload: lowConfMessage,
+      slackMessage: renderFallbackMessage(fallbackText),
+      payload: fallbackPayload,
       isConfident: false,
       confidence: "low",
       chunkIds,
@@ -267,32 +276,6 @@ async function logQA(params: LogQAParams): Promise<void> {
 // Helper Functions
 // ============================================
 
-/** Determine why retrieval confidence is low */
-function determineLowConfidenceReason(retrieval: RetrievalResult): LowConfidenceReason {
-  // No chunks found at all
-  if (retrieval.chunks.length === 0) {
-    return "no_results";
-  }
-
-  // Chunks found but very low similarity
-  if (retrieval.avgSimilarity < 0.45) {
-    return "low_similarity";
-  }
-
-  // Check for low relevance after reranking (if available)
-  const firstChunk = retrieval.chunks[0];
-  if (firstChunk && "relevanceScore" in firstChunk) {
-    const avgRelevance =
-      retrieval.chunks.reduce((sum, c) => sum + ((c as { relevanceScore?: number }).relevanceScore ?? 5), 0) /
-      retrieval.chunks.length;
-    if (avgRelevance < 4) {
-      return "low_relevance";
-    }
-  }
-
-  // Default to low similarity if we can't determine specific reason
-  return "low_similarity";
-}
 
 /** Calculate composite confidence from multiple signals */
 function calculateCompositeConfidence(

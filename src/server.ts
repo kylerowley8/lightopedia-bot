@@ -44,6 +44,7 @@ interface SlackMessageEvent {
 
 interface SlackEventContext {
   teamId?: string;
+  botUserId?: string;
 }
 
 interface SlackClient {
@@ -153,7 +154,7 @@ slackApp.event("app_mention", async ({ event, client, context }: { event: unknow
 
   try {
     // Fetch thread history for conversation context
-    const conversationHistory = await getThreadHistory(slackClient, e.channel, threadTs, e.ts);
+    const conversationHistory = await getThreadHistory(slackClient, e.channel, threadTs, e.ts, ctx.botUserId);
 
     const pending = await slackClient.chat.postMessage({
       channel: e.channel,
@@ -208,7 +209,7 @@ slackApp.message(async ({ message, client, context }: { message: unknown; client
 
   try {
     // Fetch thread history for conversation context
-    const conversationHistory = await getThreadHistory(slackClient, m.channel, threadTs, m.ts);
+    const conversationHistory = await getThreadHistory(slackClient, m.channel, threadTs, m.ts, ctx.botUserId);
 
     const pending = await slackClient.chat.postMessage({
       channel: m.channel,

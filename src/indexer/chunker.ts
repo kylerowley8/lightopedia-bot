@@ -79,13 +79,18 @@ function chunkSection(text: string, maxSize: number, overlap: number): string[] 
   let current = "";
 
   for (const para of paragraphs) {
-    if (current.length + para.length > maxSize && current.length > 0) {
-      chunks.push(current);
-      // Start next chunk with overlap from end of current
-      const overlapText = current.slice(-overlap);
-      current = overlapText + "\n\n" + para;
-    } else {
-      current = current ? current + "\n\n" + para : para;
+    // If paragraph itself is too long, split it further
+    const paraParts = splitLongText(para, maxSize);
+
+    for (const part of paraParts) {
+      if (current.length + part.length > maxSize && current.length > 0) {
+        chunks.push(current);
+        // Start next chunk with overlap from end of current
+        const overlapText = current.slice(-overlap);
+        current = overlapText + "\n\n" + part;
+      } else {
+        current = current ? current + "\n\n" + part : part;
+      }
     }
   }
 
@@ -93,5 +98,89 @@ function chunkSection(text: string, maxSize: number, overlap: number): string[] 
     chunks.push(current);
   }
 
-  return chunks;
+  // Final safety check: split any chunks that are still too large
+  const safeChunks: string[] = [];
+  for (const chunk of chunks) {
+    if (chunk.length > maxSize * 1.5) {
+      // Allow some flexibility but catch very large chunks
+      safeChunks.push(...splitLongText(chunk, maxSize));
+    } else {
+      safeChunks.push(chunk);
+    }
+  }
+
+  return safeChunks;
+}
+
+/**
+ * Split text that's too long by sentence boundaries or hard character limits.
+ */
+function splitLongText(text: string, maxSize: number): string[] {
+  if (text.length <= maxSize) return [text];
+
+  const parts: string[] = [];
+
+  // First try to split by sentences
+  const sentences = text.split(/(?<=[.!?])\s+/);
+  let current = "";
+
+  for (const sentence of sentences) {
+    if (sentence.length > maxSize) {
+      // Sentence is too long, push current and split sentence by newlines or hard limit
+      if (current.trim()) {
+        parts.push(current.trim());
+        current = "";
+      }
+      parts.push(...splitByNewlinesOrHard(sentence, maxSize));
+    } else if (current.length + sentence.length > maxSize) {
+      if (current.trim()) {
+        parts.push(current.trim());
+      }
+      current = sentence;
+    } else {
+      current = current ? current + " " + sentence : sentence;
+    }
+  }
+
+  if (current.trim()) {
+    parts.push(current.trim());
+  }
+
+  return parts.length > 0 ? parts : [text.slice(0, maxSize)];
+}
+
+/**
+ * Split by newlines first, then by hard character limit as last resort.
+ */
+function splitByNewlinesOrHard(text: string, maxSize: number): string[] {
+  const parts: string[] = [];
+  const lines = text.split("\n");
+  let current = "";
+
+  for (const line of lines) {
+    if (line.length > maxSize) {
+      // Line is too long, hard split it
+      if (current.trim()) {
+        parts.push(current.trim());
+        current = "";
+      }
+      // Hard split by character limit
+      for (let i = 0; i < line.length; i += maxSize) {
+        parts.push(line.slice(i, i + maxSize));
+      }
+    } else if (current.length + line.length + 1 > maxSize) {
+      if (current.trim()) {
+        parts.push(current.trim());
+      }
+      current = line;
+    } else {
+      current = current ? current + "\n" + line : line;
+    }
+  }
+
+  if (current.trim()) {
+    parts.push(current.trim());
+  }
+
+  return parts;
 }

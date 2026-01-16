@@ -2,11 +2,15 @@
 export const ALLOW_PATHS = [
   // Documentation
   "**/*.md",
-  // Source code
+  // Source code - JavaScript/TypeScript
   "**/*.ts",
   "**/*.tsx",
   "**/*.js",
   "**/*.jsx",
+  // Source code - Kotlin/Java (Light main codebase)
+  "**/*.kt",
+  "**/*.kts",
+  "**/*.java",
   // Config files
   "**/*.json",
   "**/*.yaml",
