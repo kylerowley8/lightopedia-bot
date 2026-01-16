@@ -11,19 +11,22 @@ Given a user question, generate 3 short keyword-based search queries (NOT full q
 - Use different terminology to maximize matches
 - Focus on the core concepts
 
-IMPORTANT - Light uses specific terminology. Always include synonyms:
-- "contracts" → also use "bills", "invoices", "supplier invoices"
+IMPORTANT - Light uses specific terminology. Include synonyms where appropriate:
+- "bills" → also use "invoices", "supplier invoices", "AP invoices" (NOT contracts - contracts are different)
+- "contracts" → sales contracts, customer agreements (NOT bills - these are different)
 - "OCR" → also use "document scanning", "ingestion", "extraction"
 - "vendors" → also use "suppliers"
 - "payments" → also use "payment runs", "AP", "accounts payable"
 - "customers" → also use "accounts", "AR", "accounts receivable"
+- "GAAP" → also use "accounting standards", "US GAAP", "reporting"
+- "IFRS" → also use "international standards", "accounting standards", "reporting"
 
 Example:
-Question: "How does Light handle contract scanning?"
+Question: "How does Light handle bill scanning?"
 Good output:
-bills OCR extraction
+invoice OCR extraction
 supplier invoice ingestion
-document scanning Light
+AP document scanning
 
 Respond with exactly 3 keyword queries, one per line, no numbering or bullets.`;
 
