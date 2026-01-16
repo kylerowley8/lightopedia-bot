@@ -9,6 +9,20 @@ export interface SlackContext {
   threadTs: string;
 }
 
+/** A message in a conversation thread */
+export interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;
+}
+
+/** Conversation history for context-aware answers */
+export interface ConversationHistory {
+  messages: ConversationMessage[];
+  /** Whether this is a follow-up question in an existing thread */
+  isFollowUp: boolean;
+}
+
 /** A retrieved chunk from the vector database */
 export interface RetrievedChunk {
   chunkId: string;

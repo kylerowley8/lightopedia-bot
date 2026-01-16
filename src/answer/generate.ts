@@ -16,7 +16,8 @@ import {
   type SlackMessage,
 } from "../slack/renderAnswer.js";
 import { parseAnswerPayload, buildSources, type AnswerPayload } from "../types/answer.js";
-import type { RetrievalResult, SlackContext, ConfidenceLevel } from "../types/index.js";
+import type { RetrievalResult, SlackContext, ConfidenceLevel, ConversationHistory } from "../types/index.js";
+import { formatConversationContext } from "../slack/threadHistory.js";
 
 const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
@@ -35,7 +36,8 @@ export async function generateAnswer(
   question: string,
   retrieval: RetrievalResult,
   userId: string,
-  slackContext: Partial<SlackContext>
+  slackContext: Partial<SlackContext>,
+  conversationHistory?: ConversationHistory
 ): Promise<GenerateResult> {
   const requestId = crypto.randomUUID().slice(0, 8);
   const log = createRequestLogger(requestId, "synthesize");
@@ -49,6 +51,8 @@ export async function generateAnswer(
     chunkCount: retrieval.chunks.length,
     avgSimilarity: retrieval.avgSimilarity.toFixed(3),
     isConfident: retrieval.isConfident,
+    isFollowUp: conversationHistory?.isFollowUp ?? false,
+    historyLength: conversationHistory?.messages.length ?? 0,
     ...slackContext,
   });
 
@@ -89,7 +93,20 @@ export async function generateAnswer(
     })
     .join("\n\n---\n\n");
 
-  const userMessage = `QUESTION:
+  // Include conversation history for follow-up questions
+  const conversationContext = conversationHistory
+    ? formatConversationContext(conversationHistory)
+    : "";
+
+  const userMessage = conversationContext
+    ? `${conversationContext}
+
+QUESTION:
+${question}
+
+CONTEXT (use as the only source of truth):
+${context}`
+    : `QUESTION:
 ${question}
 
 CONTEXT (use as the only source of truth):

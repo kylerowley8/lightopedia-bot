@@ -7,7 +7,8 @@ import { wrapError, getUserMessage } from "./lib/errors.js";
 import { handleGitHubWebhook } from "./github/webhook.js";
 import { retrieveContext } from "./retrieval/retrieve.js";
 import { generateAnswer, type GenerateResult } from "./answer/generate.js";
-import type { SlackContext } from "./types/index.js";
+import type { SlackContext, ConversationHistory } from "./types/index.js";
+import { getThreadHistory } from "./slack/threadHistory.js";
 
 // ============================================
 // Slack App Setup
@@ -58,6 +59,24 @@ interface SlackClient {
       blocks?: unknown[];
     }) => Promise<void>;
   };
+  conversations: {
+    replies: (params: {
+      channel: string;
+      ts: string;
+      limit?: number;
+    }) => Promise<{
+      ok: boolean;
+      messages?: Array<{
+        type: string;
+        user?: string;
+        bot_id?: string;
+        text?: string;
+        ts: string;
+        subtype?: string;
+      }>;
+      error?: string;
+    }>;
+  };
 }
 
 // ============================================
@@ -88,10 +107,11 @@ const MAX_RECENT = 20;
 async function answerQuestion(
   question: string,
   userId: string,
-  slackContext: Partial<SlackContext>
+  slackContext: Partial<SlackContext>,
+  conversationHistory?: ConversationHistory
 ): Promise<GenerateResult> {
   const retrieval = await retrieveContext(question);
-  const result = await generateAnswer(question, retrieval, userId, slackContext);
+  const result = await generateAnswer(question, retrieval, userId, slackContext, conversationHistory);
 
   // Store for debug endpoint
   recentAnswers.unshift({
@@ -130,6 +150,9 @@ slackApp.event("app_mention", async ({ event, client, context }: { event: unknow
   };
 
   try {
+    // Fetch thread history for conversation context
+    const conversationHistory = await getThreadHistory(slackClient, e.channel, threadTs, e.ts);
+
     const pending = await slackClient.chat.postMessage({
       channel: e.channel,
       thread_ts: threadTs,
@@ -137,7 +160,7 @@ slackApp.event("app_mention", async ({ event, client, context }: { event: unknow
     });
     pendingTs = pending.ts;
 
-    const result = await answerQuestion(userText, e.user, slackContext);
+    const result = await answerQuestion(userText, e.user, slackContext, conversationHistory);
 
     // Send Block Kit formatted response
     await slackClient.chat.update({
@@ -182,6 +205,9 @@ slackApp.message(async ({ message, client, context }: { message: unknown; client
   };
 
   try {
+    // Fetch thread history for conversation context
+    const conversationHistory = await getThreadHistory(slackClient, m.channel, threadTs, m.ts);
+
     const pending = await slackClient.chat.postMessage({
       channel: m.channel,
       thread_ts: threadTs,
@@ -189,7 +215,7 @@ slackApp.message(async ({ message, client, context }: { message: unknown; client
     });
     pendingTs = pending.ts;
 
-    const result = await answerQuestion((m.text || "").trim(), m.user, slackContext);
+    const result = await answerQuestion((m.text || "").trim(), m.user, slackContext, conversationHistory);
 
     // Send Block Kit formatted response
     await slackClient.chat.update({
