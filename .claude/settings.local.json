@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsx:*)",
+      "Bash(fly secrets set:*)",
+      "Bash(fly ssh console:*)"
+    ]
+  }
+}
