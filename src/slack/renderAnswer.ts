@@ -138,9 +138,24 @@ export function renderAnswer(payload: AnswerPayload, requestId: string): SlackMe
   };
 }
 
-/** Render low-confidence response */
-export function renderLowConfidenceResponse(requestId: string): SlackMessage {
-  const text = `I don't see this covered in the current docs or code.
+/** Low confidence payload structure */
+interface LowConfidencePayload {
+  summary: string;
+  bullets: Array<{ text: string; citations: number[] }>;
+}
+
+/** Render low-confidence response with custom message */
+export function renderLowConfidenceResponse(
+  requestId: string,
+  customMessage?: LowConfidencePayload
+): SlackMessage {
+  // Build message from custom payload or use default
+  let text: string;
+  if (customMessage) {
+    const bulletText = customMessage.bullets.map((b) => `• ${b.text}`).join("\n");
+    text = `${customMessage.summary}\n\n${bulletText}`;
+  } else {
+    text = `I don't see this covered in the current docs or code.
 
 If this is something you think Light should support, the best next step is to submit a *Feature Request* so the Product team can review it.
 
@@ -151,6 +166,7 @@ If this is something you think Light should support, the best next step is to su
 4. Choose the *Feature Request* template
 
 Feature requests are reviewed by the Product team during regular triage.`;
+  }
 
   return {
     blocks: [
@@ -185,7 +201,7 @@ Feature requests are reviewed by the Product team during regular triage.`;
         ],
       },
     ],
-    text: `I don't see this covered in the current docs. (Request ID: ${requestId})`,
+    text: `${customMessage?.summary ?? "I don't see this covered in the current docs."} (Request ID: ${requestId})`,
   };
 }
 

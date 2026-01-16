@@ -24,7 +24,7 @@ export type Source = z.infer<typeof SourceSchema>;
 
 /** A bullet point with citations */
 export const BulletSchema = z.object({
-  text: z.string(),
+  text: z.string().max(200, "Bullet too long"),
   citations: z.array(z.number()).default([]),
 });
 
@@ -37,9 +37,9 @@ export type ConfidenceLevel = z.infer<typeof ConfidenceLevelSchema>;
 /** The full structured answer payload */
 export const AnswerPayloadSchema = z.object({
   /** One-sentence direct answer */
-  summary: z.string(),
+  summary: z.string().max(300, "Summary too long"),
   /** Supporting details as bullets with citations */
-  bullets: z.array(BulletSchema).default([]),
+  bullets: z.array(BulletSchema).max(5, "Too many bullets").default([]),
   /** Sources used */
   sources: z.array(SourceSchema).default([]),
   /** Confidence level */
@@ -48,26 +48,111 @@ export const AnswerPayloadSchema = z.object({
   followups: z.array(z.string()).optional(),
 });
 
+/** Check if all bullets have citations */
+export function validateCitations(payload: AnswerPayload): {
+  isValid: boolean;
+  uncitedCount: number;
+} {
+  const uncitedBullets = payload.bullets.filter((b) => b.citations.length === 0);
+  return {
+    isValid: uncitedBullets.length === 0,
+    uncitedCount: uncitedBullets.length,
+  };
+}
+
 export type AnswerPayload = z.infer<typeof AnswerPayloadSchema>;
 
-/** Parse and validate LLM output */
-export function parseAnswerPayload(raw: string): AnswerPayload | null {
-  try {
-    // Try to extract JSON from the response (in case there's extra text)
-    const jsonMatch = raw.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
+/** Result of parsing attempt with error details */
+export interface ParseResult {
+  success: boolean;
+  payload: AnswerPayload | null;
+  error?: string;
+}
 
-    const parsed = JSON.parse(jsonMatch[0]);
+/** Parse and validate LLM output with detailed error reporting */
+export function parseAnswerPayload(raw: string): AnswerPayload | null {
+  const result = parseAnswerPayloadWithDetails(raw);
+  return result.payload;
+}
+
+/** Parse with detailed error information for retry logic */
+export function parseAnswerPayloadWithDetails(raw: string): ParseResult {
+  try {
+    // Try to extract JSON - use balanced brace matching for robustness
+    const jsonStr = extractJson(raw);
+    if (!jsonStr) {
+      return { success: false, payload: null, error: "No JSON object found in response" };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch (e) {
+      return { success: false, payload: null, error: `JSON parse error: ${e}` };
+    }
+
     const result = AnswerPayloadSchema.safeParse(parsed);
 
     if (result.success) {
-      return result.data;
+      return { success: true, payload: result.data };
     }
 
-    return null;
-  } catch {
-    return null;
+    // Extract first error message for debugging
+    const firstError = result.error.issues[0];
+    const errorPath = firstError?.path.join(".") || "unknown";
+    const errorMsg = firstError?.message || "validation failed";
+
+    return {
+      success: false,
+      payload: null,
+      error: `Validation error at ${errorPath}: ${errorMsg}`,
+    };
+  } catch (e) {
+    return { success: false, payload: null, error: `Unexpected error: ${e}` };
   }
+}
+
+/** Extract first complete JSON object from text using brace counting */
+function extractJson(text: string): string | null {
+  const start = text.indexOf("{");
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = start; i < text.length; i++) {
+    const char = text[i];
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escape = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (char === "{") depth++;
+    if (char === "}") {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+
+  // Fallback to greedy regex if brace counting fails
+  const match = text.match(/\{[\s\S]*\}/);
+  return match ? match[0] : null;
 }
 
 /** Build sources from retrieved chunks */
