@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
 const { App, ExpressReceiver } = require("@slack/bolt");
 import { config } from "./config/env.js";
 import { logger } from "./lib/logger.js";
