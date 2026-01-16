@@ -1,6 +1,8 @@
 import OpenAI from "openai";
+import { config } from "../config/env.js";
+import { logger } from "../lib/logger.js";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
 const EXPANSION_PROMPT = `You are a search query optimizer for a knowledge base about Light, a finance/billing platform.
 
@@ -47,7 +49,7 @@ export async function expandQuery(question: string): Promise<string[]> {
     // Always include the original question
     return [question, ...variations];
   } catch (err) {
-    console.error("Query expansion failed, using original:", err);
+    logger.warn("Query expansion failed, using original", { stage: "rewrite", error: err });
     return [question];
   }
 }

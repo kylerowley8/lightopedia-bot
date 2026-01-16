@@ -7,7 +7,8 @@ async function main() {
   const sources = new Set<string>();
   for (const row of data ?? []) {
     const meta = row.metadata as Record<string, unknown>;
-    if (meta?.source) sources.add(String(meta.source));
+    const source = meta?.["source"];
+    if (source) sources.add(String(source));
   }
 
   console.log(`Sources found (${sources.size}):`);

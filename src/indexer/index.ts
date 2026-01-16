@@ -124,8 +124,10 @@ export async function indexRepo(
 function extractTitle(content: string, filePath: string): string {
   // Try to extract title from first heading
   const match = content.match(/^#\s+(.+)$/m);
-  if (match) return match[1];
+  const heading = match?.[1];
+  if (heading) return heading;
 
   // Fall back to filename
-  return filePath.split("/").pop() || filePath;
+  const parts = filePath.split("/");
+  return parts[parts.length - 1] ?? filePath;
 }

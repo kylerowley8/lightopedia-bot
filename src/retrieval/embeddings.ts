@@ -1,6 +1,7 @@
 import OpenAI from "openai";
+import { config } from "../config/env.js";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
 const MODEL = "text-embedding-3-large";
 const DIMENSIONS = 1536; // Truncate to match schema
@@ -11,7 +12,11 @@ export async function embedQuery(text: string): Promise<number[]> {
     input: text,
     dimensions: DIMENSIONS,
   });
-  return response.data[0].embedding;
+  const embedding = response.data[0]?.embedding;
+  if (!embedding) {
+    throw new Error("No embedding returned from OpenAI");
+  }
+  return embedding;
 }
 
 export async function embedChunks(texts: string[]): Promise<number[][]> {

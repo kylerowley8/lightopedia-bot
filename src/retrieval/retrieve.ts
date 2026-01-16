@@ -1,36 +1,31 @@
 import { supabase } from "../db/supabase.js";
 import { embedQuery } from "./embeddings.js";
 import { expandQuery } from "./expandQuery.js";
+import { logger } from "../lib/logger.js";
+import type { RetrievedChunk, RetrievalResult, ChunkMetadata } from "../types/index.js";
 
-export interface RetrievedChunk {
-  chunk_id: string;
-  content: string;
-  metadata: {
-    document_id?: string;
-    chunk_index?: number;
-    source?: string;
-  };
-  similarity: number;
-}
-
-export interface RetrievalResult {
-  chunks: RetrievedChunk[];
-  totalTokens: number;
-  avgSimilarity: number;
-  isConfident: boolean;
-}
+// Re-export types for backward compatibility
+export type { RetrievedChunk, RetrievalResult };
 
 const MIN_SIMILARITY = 0.42;
 const MIN_CHUNKS_FOR_CONFIDENCE = 1;
 const MIN_TOKENS_FOR_CONFIDENCE = 30;
 
+interface DbChunkRow {
+  chunk_id: string;
+  content: string;
+  metadata: ChunkMetadata | null;
+  similarity: number;
+}
+
 export async function retrieveContext(question: string, matchCount = 8): Promise<RetrievalResult> {
   // Expand the question into multiple search variations
   const queries = await expandQuery(question);
 
-  console.log("query_expansion", {
+  logger.info("Query expansion complete", {
+    stage: "retrieve",
     original: question.slice(0, 80),
-    variations: queries.slice(1),
+    variationCount: queries.length - 1,
   });
 
   // Search with each query variation and collect results
@@ -47,24 +42,31 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
     });
 
     if (error) {
-      console.error("match_chunks error for query:", query, error);
+      logger.error("match_chunks RPC failed", { stage: "retrieve", query: query.slice(0, 50), error });
       continue;
     }
 
-    console.log("query_search", {
+    const rows = (data ?? []) as DbChunkRow[];
+
+    logger.debug("Query search results", {
+      stage: "retrieve",
       query: query.slice(0, 50),
-      results: data?.length ?? 0,
-      topSimilarity: data?.[0]?.similarity?.toFixed(3),
+      results: rows.length,
+      topSimilarity: rows[0]?.similarity?.toFixed(3),
     });
 
-    for (const row of data ?? []) {
+    for (const row of rows) {
       const existing = chunkMap.get(row.chunk_id);
       // Keep the highest similarity score for each chunk
       if (!existing || row.similarity > existing.similarity) {
         chunkMap.set(row.chunk_id, {
-          chunk_id: row.chunk_id,
+          chunkId: row.chunk_id,
           content: row.content,
-          metadata: row.metadata ?? {},
+          metadata: {
+            source: row.metadata?.source ?? "unknown",
+            documentId: row.metadata?.documentId,
+            chunkIndex: row.metadata?.chunkIndex,
+          },
           similarity: row.similarity,
         });
       }
@@ -77,11 +79,11 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
   allChunks.sort((a, b) => b.similarity - a.similarity);
   const topChunks = allChunks.slice(0, matchCount);
 
-  console.log("retrieval_result", {
-    questionPreview: question.slice(0, 80),
+  logger.info("Retrieval complete", {
+    stage: "retrieve",
     queriesUsed: queries.length,
     totalFound: allChunks.length,
-    topChunkSimilarity: topChunks[0]?.similarity,
+    topChunkSimilarity: topChunks[0]?.similarity?.toFixed(3),
   });
 
   // Filter by minimum similarity
@@ -105,6 +107,7 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
     totalTokens,
     avgSimilarity,
     isConfident,
+    queriesUsed: queries,
   };
 }
 

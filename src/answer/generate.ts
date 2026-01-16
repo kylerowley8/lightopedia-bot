@@ -1,10 +1,16 @@
 import OpenAI from "openai";
-import { RetrievalResult, formatSources } from "../retrieval/retrieve.js";
+import crypto from "crypto";
+import { config } from "../config/env.js";
+import { logger, createRequestLogger } from "../lib/logger.js";
 import { supabase } from "../db/supabase.js";
 import { LIGHTOPEDIA_SYSTEM_PROMPT, RUNTIME_DIRECTIVES } from "../prompts/lightopediaSystem.js";
-import crypto from "crypto";
+import { formatSources } from "../retrieval/retrieve.js";
+import type { RetrievalResult, SlackContext, AnswerResult, ConfidenceLevel } from "../types/index.js";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Re-export for backward compatibility
+export type { AnswerResult };
+
+const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
 const LOW_CONFIDENCE_RESPONSE = `I don't see this covered in the current docs or code.
 
@@ -18,39 +24,26 @@ If this is something you think Light should support, the best next step is to su
 
 Feature requests are reviewed by the Product team during regular triage (10am and 2pm UK time).`;
 
-export interface AnswerResult {
-  requestId: string;
-  answer: string;
-  isConfident: boolean;
-  chunkIds: string[];
-  avgSimilarity: number;
-  latencyMs: number;
-}
-
 export async function generateAnswer(
   question: string,
   retrieval: RetrievalResult,
   userId: string,
-  slackContext: { teamId?: string; channelId?: string; threadTs?: string }
+  slackContext: Partial<SlackContext>
 ): Promise<AnswerResult> {
   const requestId = crypto.randomUUID().slice(0, 8);
+  const log = createRequestLogger(requestId, "synthesize");
   const startTime = Date.now();
 
-  const chunkIds = retrieval.chunks.map((c) => c.chunk_id);
+  const chunkIds = retrieval.chunks.map((c) => c.chunkId);
 
-  // Log the request
-  console.log(
-    JSON.stringify({
-      event: "question",
-      requestId,
-      userId,
-      question: question.slice(0, 100),
-      chunkCount: retrieval.chunks.length,
-      avgSimilarity: retrieval.avgSimilarity.toFixed(3),
-      isConfident: retrieval.isConfident,
-      ...slackContext,
-    })
-  );
+  log.info("Starting answer generation", {
+    userId,
+    questionPreview: question.slice(0, 100),
+    chunkCount: retrieval.chunks.length,
+    avgSimilarity: retrieval.avgSimilarity.toFixed(3),
+    isConfident: retrieval.isConfident,
+    ...slackContext,
+  });
 
   if (!retrieval.isConfident) {
     const latencyMs = Date.now() - startTime;
@@ -65,10 +58,13 @@ export async function generateAnswer(
       slackContext,
     });
 
+    log.info("Returned low-confidence response", { latencyMs });
+
     return {
       requestId,
       answer: `${LOW_CONFIDENCE_RESPONSE}\n\n_Request ID: ${requestId}_`,
       isConfident: false,
+      confidence: "low",
       chunkIds,
       avgSimilarity: retrieval.avgSimilarity,
       latencyMs,
@@ -83,7 +79,6 @@ export async function generateAnswer(
     })
     .join("\n\n---\n\n");
 
-  // Build user message with proper structure
   const userMessage = `QUESTION:
 ${question}
 
@@ -106,45 +101,46 @@ ${context}`;
   const answer = `${rawAnswer}${sources}\n\n_Request ID: ${requestId}_`;
 
   const latencyMs = Date.now() - startTime;
+  const confidence: ConfidenceLevel = retrieval.avgSimilarity >= 0.6 ? "high" : "medium";
 
   await logQA({
     requestId,
     question,
     answer: rawAnswer,
     chunkIds,
-    confidence: "high",
+    confidence,
     latencyMs,
     slackContext,
   });
 
-  console.log(
-    JSON.stringify({
-      event: "answer",
-      requestId,
-      latencyMs,
-      answerLength: rawAnswer.length,
-    })
-  );
+  log.info("Answer generated", {
+    latencyMs,
+    answerLength: rawAnswer.length,
+    confidence,
+  });
 
   return {
     requestId,
     answer,
     isConfident: true,
+    confidence,
     chunkIds,
     avgSimilarity: retrieval.avgSimilarity,
     latencyMs,
   };
 }
 
-async function logQA(params: {
+interface LogQAParams {
   requestId: string;
   question: string;
   answer: string;
   chunkIds: string[];
-  confidence: string;
+  confidence: ConfidenceLevel;
   latencyMs: number;
-  slackContext: { teamId?: string; channelId?: string; threadTs?: string };
-}) {
+  slackContext: Partial<SlackContext>;
+}
+
+async function logQA(params: LogQAParams): Promise<void> {
   try {
     await supabase.from("qa_logs").insert({
       slack_team_id: params.slackContext.teamId,
@@ -157,6 +153,6 @@ async function logQA(params: {
       latency_ms: params.latencyMs,
     });
   } catch (err) {
-    console.error("Failed to log QA:", err);
+    logger.error("Failed to log QA", { stage: "synthesize", requestId: params.requestId, error: err });
   }
 }
