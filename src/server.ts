@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
-import { App, ExpressReceiver } from "@slack/bolt";
+import * as bolt from "@slack/bolt";
+const { App, ExpressReceiver } = bolt;
 import { config } from "./config/env.js";
 import { logger } from "./lib/logger.js";
 import { wrapError, getUserMessage } from "./lib/errors.js";
