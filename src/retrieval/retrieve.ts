@@ -1,15 +1,18 @@
 import { supabase } from "../db/supabase.js";
 import { embedQuery } from "./embeddings.js";
 import { expandQuery } from "./expandQuery.js";
+import { rerankChunks, calculateKeywordBoost, type RankedChunk } from "./rerank.js";
 import { logger } from "../lib/logger.js";
 import type { RetrievedChunk, RetrievalResult, ChunkMetadata } from "../types/index.js";
 
 // Re-export types for backward compatibility
-export type { RetrievedChunk, RetrievalResult };
+export type { RetrievedChunk, RetrievalResult, RankedChunk };
 
 const MIN_SIMILARITY = 0.42;
 const MIN_CHUNKS_FOR_CONFIDENCE = 1;
 const MIN_TOKENS_FOR_CONFIDENCE = 30;
+/** Minimum average relevance score after reranking */
+const MIN_AVG_RELEVANCE = 4;
 
 interface DbChunkRow {
   chunk_id: string;
@@ -79,31 +82,72 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
   allChunks.sort((a, b) => b.similarity - a.similarity);
   const topChunks = allChunks.slice(0, matchCount);
 
-  logger.info("Retrieval complete", {
+  // Filter by minimum similarity before reranking
+  const filteredChunks = topChunks.filter((c) => c.similarity >= MIN_SIMILARITY);
+
+  logger.info("Initial retrieval complete", {
     stage: "retrieve",
     queriesUsed: queries.length,
     totalFound: allChunks.length,
-    topChunkSimilarity: topChunks[0]?.similarity?.toFixed(3),
+    afterFilter: filteredChunks.length,
+    topSimilarity: filteredChunks[0]?.similarity?.toFixed(3),
   });
 
-  // Filter by minimum similarity
-  const relevantChunks = topChunks.filter((c) => c.similarity >= MIN_SIMILARITY);
+  // Skip reranking if no chunks found
+  if (filteredChunks.length === 0) {
+    return {
+      chunks: [],
+      totalTokens: 0,
+      avgSimilarity: 0,
+      isConfident: false,
+      queriesUsed: queries,
+    };
+  }
+
+  // Apply keyword boost before reranking
+  const boostedChunks = filteredChunks.map((chunk) => {
+    const boost = calculateKeywordBoost(question, chunk.content);
+    return {
+      ...chunk,
+      similarity: Math.min(1, chunk.similarity + boost),
+    };
+  });
+
+  // Rerank chunks using LLM-based relevance scoring
+  const rankedChunks = await rerankChunks(question, boostedChunks);
 
   // Estimate tokens (rough: 4 chars = 1 token)
-  const totalTokens = relevantChunks.reduce((sum, c) => sum + Math.ceil(c.content.length / 4), 0);
+  const totalTokens = rankedChunks.reduce((sum, c) => sum + Math.ceil(c.content.length / 4), 0);
 
+  // Calculate average scores
   const avgSimilarity =
-    relevantChunks.length > 0
-      ? relevantChunks.reduce((sum, c) => sum + c.similarity, 0) / relevantChunks.length
+    rankedChunks.length > 0
+      ? rankedChunks.reduce((sum, c) => sum + c.combinedScore, 0) / rankedChunks.length
       : 0;
 
+  const avgRelevance =
+    rankedChunks.length > 0
+      ? rankedChunks.reduce((sum, c) => sum + c.relevanceScore, 0) / rankedChunks.length
+      : 0;
+
+  // Confidence now considers reranking scores
   const isConfident =
-    relevantChunks.length >= MIN_CHUNKS_FOR_CONFIDENCE &&
+    rankedChunks.length >= MIN_CHUNKS_FOR_CONFIDENCE &&
     totalTokens >= MIN_TOKENS_FOR_CONFIDENCE &&
-    avgSimilarity >= MIN_SIMILARITY;
+    avgSimilarity >= MIN_SIMILARITY &&
+    avgRelevance >= MIN_AVG_RELEVANCE;
+
+  logger.info("Reranking complete", {
+    stage: "retrieve",
+    inputChunks: filteredChunks.length,
+    outputChunks: rankedChunks.length,
+    avgRelevance: avgRelevance.toFixed(1),
+    avgCombined: avgSimilarity.toFixed(3),
+    isConfident,
+  });
 
   return {
-    chunks: relevantChunks,
+    chunks: rankedChunks,
     totalTokens,
     avgSimilarity,
     isConfident,
