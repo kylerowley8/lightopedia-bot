@@ -31,14 +31,23 @@ export interface RetrievedChunk {
   metadata: ChunkMetadata;
 }
 
+/** Source type for retrieval prioritization */
+export type SourceType = "code" | "docs" | "notion" | "unknown";
+
 /** Metadata stored with each chunk */
 export interface ChunkMetadata {
   source: string;
+  sourceType?: SourceType;
   documentId?: string;
   chunkIndex?: number;
   heading?: string;
   commitSha?: string;
+  filePath?: string;
+  symbols?: string[];
 }
+
+/** Retrieval mode indicating source priority */
+export type RetrievalMode = "code_only" | "code_then_docs" | "docs_only" | "none";
 
 /** Result of retrieval operation */
 export interface RetrievalResult {
@@ -47,6 +56,10 @@ export interface RetrievalResult {
   avgSimilarity: number;
   isConfident: boolean;
   queriesUsed?: string[];
+  /** Which retrieval path was used */
+  retrievalMode?: RetrievalMode;
+  /** Why confidence is low (for clarifying questions) */
+  lowConfidenceReason?: string;
 }
 
 /** Confidence level for answers */

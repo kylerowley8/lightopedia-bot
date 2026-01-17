@@ -1,16 +1,138 @@
 import { CHUNK_SIZE, CHUNK_OVERLAP } from "./config.js";
 
+export type SourceType = "code" | "docs" | "notion" | "unknown";
+
 export interface Chunk {
   content: string;
   index: number;
   metadata: {
     source: string;
+    sourceType: SourceType;
     heading?: string;
+    symbols?: string[];      // For code: class/function/object names
+    filePath?: string;       // Clean file path without repo prefix
   };
+}
+
+/**
+ * Determine source type based on file path/source
+ */
+export function getSourceType(source: string): SourceType {
+  // Notion sources
+  if (source.startsWith("notion-") || source.includes("/notion/")) {
+    return "notion";
+  }
+
+  // Code files
+  const codeExtensions = /\.(kt|kts|java|ts|tsx|js|jsx|py|go|rs|rb|swift|scala)$/i;
+  if (codeExtensions.test(source)) {
+    return "code";
+  }
+
+  // Documentation
+  const docExtensions = /\.(md|mdx|txt|rst|adoc)$/i;
+  if (docExtensions.test(source)) {
+    return "docs";
+  }
+
+  // Config files (treat as code)
+  const configExtensions = /\.(json|yaml|yml|toml|xml|gradle|properties)$/i;
+  if (configExtensions.test(source)) {
+    return "code";
+  }
+
+  return "unknown";
+}
+
+/**
+ * Extract symbols from Kotlin code (class, object, interface, function names)
+ */
+export function extractKotlinSymbols(content: string): string[] {
+  const symbols: string[] = [];
+
+  // Match class/object/interface declarations
+  const classPattern = /(?:class|object|interface|enum\s+class)\s+(\w+)/g;
+  let match;
+  while ((match = classPattern.exec(content)) !== null) {
+    if (match[1]) symbols.push(match[1]);
+  }
+
+  // Match function declarations
+  const funPattern = /fun\s+(?:<[^>]+>\s+)?(\w+)\s*\(/g;
+  while ((match = funPattern.exec(content)) !== null) {
+    if (match[1]) symbols.push(match[1]);
+  }
+
+  // Match top-level val/var declarations
+  const valPattern = /^(?:val|var)\s+(\w+)\s*[=:]/gm;
+  while ((match = valPattern.exec(content)) !== null) {
+    if (match[1]) symbols.push(match[1]);
+  }
+
+  return [...new Set(symbols)]; // Deduplicate
+}
+
+/**
+ * Extract symbols from TypeScript/JavaScript code
+ */
+export function extractTsSymbols(content: string): string[] {
+  const symbols: string[] = [];
+
+  // Match class/interface declarations
+  const classPattern = /(?:class|interface|type|enum)\s+(\w+)/g;
+  let match;
+  while ((match = classPattern.exec(content)) !== null) {
+    if (match[1]) symbols.push(match[1]);
+  }
+
+  // Match function declarations
+  const funPattern = /(?:function|async\s+function)\s+(\w+)\s*\(/g;
+  while ((match = funPattern.exec(content)) !== null) {
+    if (match[1]) symbols.push(match[1]);
+  }
+
+  // Match exported const/let declarations
+  const constPattern = /export\s+(?:const|let|var)\s+(\w+)\s*[=:]/g;
+  while ((match = constPattern.exec(content)) !== null) {
+    if (match[1]) symbols.push(match[1]);
+  }
+
+  return [...new Set(symbols)];
+}
+
+/**
+ * Extract symbols based on file type
+ */
+export function extractSymbols(content: string, source: string): string[] {
+  if (/\.(kt|kts)$/i.test(source)) {
+    return extractKotlinSymbols(content);
+  }
+  if (/\.(ts|tsx|js|jsx)$/i.test(source)) {
+    return extractTsSymbols(content);
+  }
+  return [];
+}
+
+/**
+ * Extract clean file path from source (remove repo prefix)
+ */
+export function extractFilePath(source: string): string {
+  // source is like "light-space/light/path/to/file.kt"
+  // We want "path/to/file.kt"
+  const parts = source.split("/");
+  if (parts.length > 2) {
+    return parts.slice(2).join("/");
+  }
+  return source;
 }
 
 export function chunkDocument(content: string, source: string): Chunk[] {
   const chunks: Chunk[] = [];
+  const sourceType = getSourceType(source);
+  const filePath = extractFilePath(source);
+
+  // Extract symbols from the full document for code files
+  const documentSymbols = sourceType === "code" ? extractSymbols(content, source) : [];
 
   // Split by markdown headings first
   const sections = splitByHeadings(content);
@@ -20,12 +142,19 @@ export function chunkDocument(content: string, source: string): Chunk[] {
     const sectionChunks = chunkSection(section.content, CHUNK_SIZE, CHUNK_OVERLAP);
 
     for (const text of sectionChunks) {
+      // Extract symbols specific to this chunk for code files
+      const chunkSymbols = sourceType === "code" ? extractSymbols(text, source) : [];
+
       chunks.push({
         content: text.trim(),
         index: chunkIndex++,
         metadata: {
           source,
+          sourceType,
+          filePath,
           heading: section.heading,
+          // Include chunk-specific symbols, fall back to document symbols for context
+          symbols: chunkSymbols.length > 0 ? chunkSymbols : documentSymbols.slice(0, 5),
         },
       });
     }

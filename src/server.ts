@@ -269,6 +269,85 @@ slackApp.action("feedback_not_helpful", async ({ ack, body, client }: { ack: () 
 });
 
 // ============================================
+// Clarifying Question Action Handlers
+// ============================================
+
+interface ClarifyActionBody {
+  actions?: Array<{ value?: string; action_id?: string }>;
+  user?: { id?: string };
+  channel?: { id?: string };
+  message?: { ts?: string; thread_ts?: string };
+  container?: { thread_ts?: string; channel_id?: string };
+}
+
+// Handle clarifying option button clicks (clarify_option_0 through clarify_option_4)
+const handleClarifyOption = async ({ ack, body, client }: { ack: () => Promise<void>; body: unknown; client: unknown }) => {
+  await ack();
+
+  const actionBody = body as ClarifyActionBody;
+  const slackClient = client as SlackClient;
+  const actionValue = actionBody.actions?.[0]?.value;
+  const userId = actionBody.user?.id || "unknown";
+  const channelId = actionBody.channel?.id || actionBody.container?.channel_id;
+  const messageTs = actionBody.message?.ts;
+  const threadTs = actionBody.message?.thread_ts || actionBody.container?.thread_ts || messageTs;
+
+  if (!actionValue || !channelId || !messageTs || !threadTs) {
+    logger.warn("Missing required data for clarify action", { stage: "slack", actionBody });
+    return;
+  }
+
+  try {
+    // Parse the action value
+    const { requestId, option } = JSON.parse(actionValue) as { requestId: string; option: string };
+
+    logger.info("Clarifying option selected", { stage: "slack", requestId, option: option.slice(0, 50), userId });
+
+    // Update the message to show we're processing
+    await slackClient.chat.update({
+      channel: channelId,
+      ts: messageTs,
+      text: "🔎 Looking that up…",
+      blocks: [{ type: "section", text: { type: "mrkdwn", text: "🔎 Looking that up…" } }],
+    });
+
+    const slackContext: Partial<SlackContext> = {
+      channelId,
+      threadTs,
+    };
+
+    // Run the clarified question through the answer pipeline
+    const result = await answerQuestion(option, userId, slackContext);
+
+    // Update the message with the answer
+    await slackClient.chat.update({
+      channel: channelId,
+      ts: messageTs,
+      text: result.slackMessage.text,
+      blocks: result.slackMessage.blocks,
+    });
+  } catch (err) {
+    logger.error("Failed to handle clarify action", { stage: "slack", error: err });
+
+    // Try to update with error message
+    if (channelId && messageTs) {
+      await slackClient.chat.update({
+        channel: channelId,
+        ts: messageTs,
+        text: "Sorry, something went wrong processing your selection. Please try asking your question again.",
+      }).catch(() => {});
+    }
+  }
+};
+
+// Register handlers for each clarify option button
+slackApp.action("clarify_option_0", handleClarifyOption);
+slackApp.action("clarify_option_1", handleClarifyOption);
+slackApp.action("clarify_option_2", handleClarifyOption);
+slackApp.action("clarify_option_3", handleClarifyOption);
+slackApp.action("clarify_option_4", handleClarifyOption);
+
+// ============================================
 // Express Routes
 // ============================================
 

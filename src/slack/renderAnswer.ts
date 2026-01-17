@@ -221,6 +221,63 @@ export function renderFallbackMessage(text: string): SlackMessage {
   };
 }
 
+/** Clarifying question option */
+export interface ClarifyingOption {
+  label: string;
+  value: string;
+}
+
+/** Render a clarifying question with option buttons */
+export function renderClarifyingQuestion(
+  introText: string,
+  options: ClarifyingOption[],
+  requestId: string
+): SlackMessage {
+  const blocks: Block[] = [
+    {
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: sanitizeMarkdown(introText),
+      },
+    },
+  ];
+
+  // Add option buttons (max 5 buttons per action block)
+  if (options.length > 0) {
+    const buttonElements: ButtonElement[] = options.slice(0, 5).map((opt, i) => ({
+      type: "button",
+      text: {
+        type: "plain_text",
+        text: truncateText(opt.label, 75), // Slack limit for button text
+        emoji: true,
+      },
+      action_id: `clarify_option_${i}`,
+      value: JSON.stringify({ requestId, option: opt.value }),
+    }));
+
+    blocks.push({
+      type: "actions",
+      elements: buttonElements,
+    });
+  }
+
+  blocks.push({
+    type: "context",
+    elements: [
+      {
+        type: "mrkdwn",
+        text: `_Request ID: ${requestId}_`,
+      },
+    ],
+  });
+
+  return {
+    blocks,
+    text: introText.slice(0, 200),
+  };
+}
+
 /** Render plain text fallback (when structured output fails) */
 export function renderPlainText(text: string, requestId: string, sources?: Source[]): SlackMessage {
   const blocks: Block[] = [

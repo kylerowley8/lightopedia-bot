@@ -13,7 +13,9 @@ import {
   renderAnswer,
   renderPlainText,
   renderFallbackMessage,
+  renderClarifyingQuestion,
   type SlackMessage,
+  type ClarifyingOption,
 } from "../slack/renderAnswer.js";
 import {
   parseAnswerPayloadWithDetails,
@@ -64,12 +66,54 @@ export async function generateAnswer(
     ...slackContext,
   });
 
-  // Handle low-confidence retrieval with unified fallback
+  // Handle low-confidence retrieval
   if (!retrieval.isConfident) {
     const latencyMs = Date.now() - startTime;
-    const fallbackText = missingContextFallback(requestId);
 
-    // Create minimal payload for logging
+    // Try to generate clarifying options from the chunks we have
+    const clarifyingOptions = generateClarifyingOptions(question, retrieval);
+
+    if (clarifyingOptions.length > 0) {
+      // We found potential topics - ask user to clarify
+      const introText = "I found a few different topics this might relate to. Which one are you asking about?";
+
+      log.info("Returning clarifying question", {
+        latencyMs,
+        optionCount: clarifyingOptions.length,
+        chunkCount: retrieval.chunks.length,
+      });
+
+      const clarifyPayload = {
+        summary: "Clarifying question presented to user",
+        bullets: [],
+        sources: [],
+        confidence: "low" as const,
+      };
+
+      await logQA({
+        requestId,
+        question,
+        payload: clarifyPayload,
+        chunkIds,
+        confidence: "low",
+        latencyMs,
+        slackContext,
+      });
+
+      return {
+        requestId,
+        slackMessage: renderClarifyingQuestion(introText, clarifyingOptions, requestId),
+        payload: clarifyPayload,
+        isConfident: false,
+        confidence: "low",
+        chunkIds,
+        avgSimilarity: retrieval.avgSimilarity,
+        latencyMs,
+      };
+    }
+
+    // No clarifying options - return standard fallback
+    const fallbackText = missingContextFallback(requestId);
     const fallbackPayload = {
       summary: "I don't see this answered in the current docs or code I have indexed.",
       bullets: [],
@@ -93,7 +137,6 @@ export async function generateAnswer(
       avgSimilarity: retrieval.avgSimilarity.toFixed(3),
     });
 
-    // Return plain text fallback - no structured answer, no citations
     return {
       requestId,
       slackMessage: renderFallbackMessage(fallbackText),
@@ -181,8 +224,49 @@ ${context}`;
       })),
     };
 
-    // Validate citations and adjust confidence if needed
+    // Validate citations
     const citationCheck = validateCitations(payload);
+
+    // HARD CITATION GATE: If no bullets have citations, reject the answer entirely
+    // This ensures we never return ungrounded answers
+    const totalCitations = payload.bullets.reduce((sum, b) => sum + b.citations.length, 0);
+    if (totalCitations === 0 && payload.bullets.length > 0) {
+      log.warn("Citation gate triggered - no citations found, returning fallback", {
+        bulletCount: payload.bullets.length,
+        latencyMs,
+      });
+
+      const fallbackText = missingContextFallback(requestId);
+      const fallbackPayload = {
+        summary: "I couldn't ground this answer in the available sources.",
+        bullets: [],
+        sources: [],
+        confidence: "low" as const,
+      };
+
+      await logQA({
+        requestId,
+        question,
+        payload: fallbackPayload,
+        chunkIds,
+        confidence: "low",
+        latencyMs,
+        slackContext,
+      });
+
+      return {
+        requestId,
+        slackMessage: renderFallbackMessage(fallbackText),
+        payload: fallbackPayload,
+        isConfident: false,
+        confidence: "low",
+        chunkIds,
+        avgSimilarity: retrieval.avgSimilarity,
+        latencyMs,
+      };
+    }
+
+    // Downgrade confidence for partially uncited answers
     if (!citationCheck.isValid && payload.confidence === "high") {
       log.warn("Downgrading confidence due to uncited bullets", {
         uncitedCount: citationCheck.uncitedCount,
@@ -203,6 +287,7 @@ ${context}`;
       latencyMs,
       confidence: payload.confidence,
       bulletCount: payload.bullets.length,
+      totalCitations,
       parseAttempts,
     });
   } else {
@@ -316,4 +401,100 @@ function calculateCompositeConfidence(
   }
 
   return modelConfidence;
+}
+
+/**
+ * Generate clarifying options from retrieval results.
+ * Analyzes the chunks to find distinct topics/areas that the question might relate to.
+ * Returns empty array if no meaningful options can be generated.
+ */
+function generateClarifyingOptions(
+  question: string,
+  retrieval: RetrievalResult
+): ClarifyingOption[] {
+  // Need at least 2 chunks with different sources to generate options
+  if (retrieval.chunks.length < 2) {
+    return [];
+  }
+
+  // Group chunks by their source area/module
+  const topicGroups = new Map<string, { label: string; sources: Set<string>; count: number }>();
+
+  for (const chunk of retrieval.chunks) {
+    const source = chunk.metadata.source || "";
+
+    // Extract meaningful topic from source path
+    // e.g., "light-space/light/billing/Invoice.kt" -> "billing"
+    // e.g., "light-space/light/accounting/ledger/Entry.kt" -> "accounting"
+    const topic = extractTopicFromSource(source);
+    if (!topic) continue;
+
+    const existing = topicGroups.get(topic);
+    if (existing) {
+      existing.sources.add(source);
+      existing.count++;
+    } else {
+      topicGroups.set(topic, {
+        label: formatTopicLabel(topic),
+        sources: new Set([source]),
+        count: 1,
+      });
+    }
+  }
+
+  // Only generate options if we have multiple distinct topics
+  if (topicGroups.size < 2) {
+    return [];
+  }
+
+  // Sort by count and take top options
+  const sortedTopics = Array.from(topicGroups.entries())
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, 4);
+
+  return sortedTopics.map(([topic, data]) => ({
+    label: data.label,
+    value: `${question} (specifically about ${topic})`,
+  }));
+}
+
+/**
+ * Extract a topic/module name from a source path.
+ * Returns null if no meaningful topic can be extracted.
+ */
+function extractTopicFromSource(source: string): string | null {
+  const parts = source.split("/");
+
+  // Skip very short paths
+  if (parts.length < 3) return null;
+
+  // For code files, look for module/package names
+  // Pattern: repo/project/module/submodule/file.ext
+  // We want "module" or "module/submodule"
+
+  // Skip first two parts (typically "org/repo" or "repo/project")
+  const moduleParts = parts.slice(2, -1);
+
+  if (moduleParts.length === 0) return null;
+
+  // Return first meaningful directory
+  const topic = moduleParts[0];
+
+  // Skip generic directories
+  const genericDirs = ["src", "main", "java", "kotlin", "ts", "js", "lib", "utils", "common", "shared"];
+  if (!topic || genericDirs.includes(topic.toLowerCase())) {
+    return moduleParts[1] || null;
+  }
+
+  return topic;
+}
+
+/**
+ * Format a topic name into a readable label.
+ */
+function formatTopicLabel(topic: string): string {
+  // Convert snake_case or kebab-case to Title Case
+  return topic
+    .replace(/[-_]/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }

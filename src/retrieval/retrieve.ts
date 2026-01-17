@@ -4,7 +4,7 @@ import { expandQuery } from "./expandQuery.js";
 import { rerankChunks, calculateKeywordBoost, type RankedChunk } from "./rerank.js";
 import { keywordSearch, mergeSearchResults } from "./keywordSearch.js";
 import { logger } from "../lib/logger.js";
-import type { RetrievedChunk, RetrievalResult, ChunkMetadata } from "../types/index.js";
+import type { RetrievedChunk, RetrievalResult, ChunkMetadata, SourceType, RetrievalMode } from "../types/index.js";
 
 // Re-export types for backward compatibility
 export type { RetrievedChunk, RetrievalResult, RankedChunk };
@@ -16,6 +16,60 @@ const MIN_TOKENS_FOR_CONFIDENCE = 30;
 const MIN_AVG_RELEVANCE = 4;
 /** Timeout for each vector RPC call in ms */
 const VECTOR_RPC_TIMEOUT_MS = 5000;
+/** Minimum code chunks needed before falling back to docs */
+const MIN_CODE_CHUNKS_FOR_CONFIDENCE = 1;
+
+/**
+ * Infer sourceType from source path if not present in metadata
+ */
+function inferSourceType(source: string): SourceType {
+  if (source.startsWith("notion-") || source.includes("/notion/")) {
+    return "notion";
+  }
+  if (/\.(kt|kts|java|ts|tsx|js|jsx|py|go|rs)$/i.test(source)) {
+    return "code";
+  }
+  if (/\.(md|mdx|txt|rst)$/i.test(source)) {
+    return "docs";
+  }
+  if (/\.(json|yaml|yml|toml|xml|gradle)$/i.test(source)) {
+    return "code";
+  }
+  return "unknown";
+}
+
+/**
+ * Get sourceType from chunk, inferring if not present
+ */
+function getChunkSourceType(chunk: RetrievedChunk): SourceType {
+  return chunk.metadata.sourceType ?? inferSourceType(chunk.metadata.source ?? "");
+}
+
+/**
+ * Filter chunks by source type
+ */
+function filterBySourceType(chunks: RetrievedChunk[], types: SourceType[]): RetrievedChunk[] {
+  return chunks.filter((c) => types.includes(getChunkSourceType(c)));
+}
+
+/**
+ * Boost chunks based on source type (code gets priority)
+ */
+function applySourceTypeBoost(chunks: RetrievedChunk[]): RetrievedChunk[] {
+  return chunks.map((chunk) => {
+    const sourceType = getChunkSourceType(chunk);
+    let boost = 0;
+    if (sourceType === "code") {
+      boost = 0.05; // Boost code sources
+    } else if (sourceType === "notion") {
+      boost = -0.02; // Slight penalty for Notion (prefer code/docs)
+    }
+    return {
+      ...chunk,
+      similarity: Math.min(1, chunk.similarity + boost),
+    };
+  });
+}
 
 interface DbChunkRow {
   id: string;
@@ -203,11 +257,18 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
     mergedChunks = mergeSearchResults(vectorChunks, keywordResults, 0.7, 0.3);
   }
 
+  // Apply source type boost (code > docs > notion)
+  const boostedByType = applySourceTypeBoost(mergedChunks);
+
   // Take top results after merging
-  const topChunks = mergedChunks.slice(0, matchCount * 2); // Take more for reranking
+  const topChunks = boostedByType.slice(0, matchCount * 2); // Take more for reranking
 
   // Filter by minimum similarity
   const filteredChunks = topChunks.filter((c) => c.similarity >= MIN_SIMILARITY);
+
+  // Separate code and non-code chunks for code-first gating
+  const codeChunks = filterBySourceType(filteredChunks, ["code"]);
+  const docsChunks = filterBySourceType(filteredChunks, ["docs", "notion", "unknown"]);
 
   logger.info("Hybrid search complete", {
     stage: "retrieve",
@@ -216,22 +277,54 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
     keywordResults: keywordResults.length,
     mergedTotal: mergedChunks.length,
     afterFilter: filteredChunks.length,
+    codeChunks: codeChunks.length,
+    docsChunks: docsChunks.length,
     topSimilarity: filteredChunks[0]?.similarity?.toFixed(3),
   });
 
-  // Skip reranking if no chunks found
+  // Determine retrieval mode and which chunks to use
+  let chunksToRerank: RetrievedChunk[];
+  let retrievalMode: RetrievalMode;
+  let lowConfidenceReason: string | undefined;
+
   if (filteredChunks.length === 0) {
+    // No results at all
     return {
       chunks: [],
       totalTokens: 0,
       avgSimilarity: 0,
       isConfident: false,
       queriesUsed: queries,
+      retrievalMode: "none",
+      lowConfidenceReason: "No relevant content found in codebase or documentation.",
     };
   }
 
+  // Code-first gating: prefer code, fall back to docs only if code is insufficient
+  if (codeChunks.length >= MIN_CODE_CHUNKS_FOR_CONFIDENCE) {
+    // Have enough code - use code only
+    chunksToRerank = codeChunks;
+    retrievalMode = "code_only";
+    logger.info("Using code-only retrieval", { stage: "retrieve", codeChunks: codeChunks.length });
+  } else if (codeChunks.length > 0) {
+    // Some code but not enough - supplement with docs
+    chunksToRerank = [...codeChunks, ...docsChunks.slice(0, matchCount - codeChunks.length)];
+    retrievalMode = "code_then_docs";
+    logger.info("Using code + docs retrieval", {
+      stage: "retrieve",
+      codeChunks: codeChunks.length,
+      docsAdded: chunksToRerank.length - codeChunks.length,
+    });
+  } else {
+    // No code - use docs only
+    chunksToRerank = docsChunks;
+    retrievalMode = "docs_only";
+    lowConfidenceReason = "Answer based on documentation only, not verified against codebase.";
+    logger.info("Using docs-only retrieval (no code found)", { stage: "retrieve", docsChunks: docsChunks.length });
+  }
+
   // Apply keyword boost before reranking
-  const boostedChunks = filteredChunks.map((chunk) => {
+  const boostedChunks = chunksToRerank.map((chunk) => {
     const boost = calculateKeywordBoost(question, chunk.content);
     return {
       ...chunk,
@@ -256,19 +349,29 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
       ? rankedChunks.reduce((sum, c) => sum + c.relevanceScore, 0) / rankedChunks.length
       : 0;
 
-  // Confidence now considers reranking scores
-  const isConfident =
+  // Confidence considers reranking scores AND retrieval mode
+  let isConfident =
     rankedChunks.length >= MIN_CHUNKS_FOR_CONFIDENCE &&
     totalTokens >= MIN_TOKENS_FOR_CONFIDENCE &&
     avgSimilarity >= MIN_SIMILARITY &&
     avgRelevance >= MIN_AVG_RELEVANCE;
 
+  // Lower confidence for docs-only mode (no code verification)
+  if (retrievalMode === "docs_only" && isConfident) {
+    // Require higher thresholds for docs-only answers
+    isConfident = avgRelevance >= MIN_AVG_RELEVANCE + 1;
+    if (!isConfident) {
+      lowConfidenceReason = "Found documentation but couldn't verify against codebase.";
+    }
+  }
+
   logger.info("Reranking complete", {
     stage: "retrieve",
-    inputChunks: filteredChunks.length,
+    inputChunks: chunksToRerank.length,
     outputChunks: rankedChunks.length,
     avgRelevance: avgRelevance.toFixed(1),
     avgCombined: avgSimilarity.toFixed(3),
+    retrievalMode,
     isConfident,
   });
 
@@ -278,6 +381,8 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
     avgSimilarity,
     isConfident,
     queriesUsed: queries,
+    retrievalMode,
+    lowConfidenceReason,
   };
 }
 
