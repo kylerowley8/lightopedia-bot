@@ -24,8 +24,11 @@ export interface RankedChunk extends RetrievedChunk {
 const VECTOR_WEIGHT = 0.3;
 const RELEVANCE_WEIGHT = 0.7;
 
-/** Minimum relevance score to keep a chunk */
-const MIN_RELEVANCE_SCORE = 3;
+/** Minimum relevance score to keep a chunk (lowered from 3 to 2 for better recall) */
+const MIN_RELEVANCE_SCORE = 2;
+
+/** Minimum chunks to return even if below threshold (ensures we have something to work with) */
+const MIN_CHUNKS_TO_RETURN = 3;
 
 const RERANK_PROMPT = `You are a relevance judge for a Q&A system about Light, a finance/accounting platform.
 
@@ -109,10 +112,21 @@ export async function rerankChunks(
     // Sort by combined score descending
     rankedChunks.sort((a, b) => b.combinedScore - a.combinedScore);
 
-    // Filter out very low relevance chunks
-    const filteredChunks = rankedChunks.filter(
+    // Filter out very low relevance chunks, but ensure we keep at least MIN_CHUNKS_TO_RETURN
+    let filteredChunks = rankedChunks.filter(
       (c) => c.relevanceScore >= MIN_RELEVANCE_SCORE
     );
+
+    // If filtering removed too many, keep the top chunks regardless of score
+    // This ensures we don't return nothing when we have some results
+    if (filteredChunks.length < MIN_CHUNKS_TO_RETURN && rankedChunks.length > 0) {
+      filteredChunks = rankedChunks.slice(0, Math.min(MIN_CHUNKS_TO_RETURN, rankedChunks.length));
+      logger.info("Keeping low-scoring chunks to meet minimum", {
+        stage: "retrieve",
+        keptCount: filteredChunks.length,
+        topRelevance: filteredChunks[0]?.relevanceScore,
+      });
+    }
 
     logger.debug("Reranking complete", {
       stage: "retrieve",
