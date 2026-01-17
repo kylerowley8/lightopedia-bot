@@ -349,37 +349,29 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
       ? rankedChunks.reduce((sum, c) => sum + c.relevanceScore, 0) / rankedChunks.length
       : 0;
 
-  // Confidence considers reranking scores AND retrieval mode
-  let isConfident =
-    rankedChunks.length >= MIN_CHUNKS_FOR_CONFIDENCE &&
-    totalTokens >= MIN_TOKENS_FOR_CONFIDENCE &&
-    avgSimilarity >= MIN_SIMILARITY &&
-    avgRelevance >= MIN_AVG_RELEVANCE;
+  // Simplified confidence: if we have chunks with enough content, try to answer
+  // The citation gate in answer generation will protect against ungrounded answers
+  let isConfident = rankedChunks.length >= MIN_CHUNKS_FOR_CONFIDENCE && totalTokens >= MIN_TOKENS_FOR_CONFIDENCE;
 
-  // When vector search is degraded, be more lenient with confidence
-  // We have keyword results - let's try to answer and rely on the citation gate
-  if (vectorDegraded && rankedChunks.length >= MIN_CHUNKS_FOR_CONFIDENCE) {
-    // Keyword-only fallback: only require we have chunks and tokens
-    // The citation gate in answer generation will protect against bad answers
-    isConfident = totalTokens >= MIN_TOKENS_FOR_CONFIDENCE;
-    if (isConfident) {
-      lowConfidenceReason = "Answer based on keyword search only (vector search unavailable).";
-      logger.info("Using lenient confidence for keyword-only fallback", {
-        stage: "retrieve",
-        chunkCount: rankedChunks.length,
-        totalTokens,
-      });
+  // Add context about the retrieval quality
+  if (isConfident) {
+    if (vectorDegraded) {
+      lowConfidenceReason = "Answer based on keyword search (vector search unavailable).";
+    } else if (avgRelevance < MIN_AVG_RELEVANCE) {
+      lowConfidenceReason = "Found related content but relevance scores are low.";
+    } else if (retrievalMode === "docs_only") {
+      lowConfidenceReason = "Answer based on documentation only, not verified against codebase.";
     }
   }
 
-  // Lower confidence for docs-only mode (no code verification)
-  if (retrievalMode === "docs_only" && isConfident && !vectorDegraded) {
-    // Require higher thresholds for docs-only answers
-    isConfident = avgRelevance >= MIN_AVG_RELEVANCE + 1;
-    if (!isConfident) {
-      lowConfidenceReason = "Found documentation but couldn't verify against codebase.";
-    }
-  }
+  logger.info("Confidence check", {
+    stage: "retrieve",
+    isConfident,
+    chunkCount: rankedChunks.length,
+    totalTokens,
+    avgRelevance: avgRelevance.toFixed(1),
+    vectorDegraded,
+  });
 
   logger.info("Reranking complete", {
     stage: "retrieve",
