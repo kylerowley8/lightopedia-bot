@@ -14,6 +14,8 @@ const MIN_CHUNKS_FOR_CONFIDENCE = 1;
 const MIN_TOKENS_FOR_CONFIDENCE = 30;
 /** Minimum average relevance score after reranking */
 const MIN_AVG_RELEVANCE = 4;
+/** Timeout for each vector RPC call in ms */
+const VECTOR_RPC_TIMEOUT_MS = 5000;
 
 interface DbChunkRow {
   id: string;
@@ -25,40 +27,107 @@ interface DbChunkRow {
 interface VectorSearchResult {
   chunks: RetrievedChunk[];
   queries: string[];
+  timedOut: number;
+  failed: number;
+}
+
+/**
+ * Execute a single vector search with timeout.
+ * Returns null on timeout or error.
+ */
+async function executeVectorQuery(
+  query: string,
+  embedding: number[],
+  matchCount: number
+): Promise<{ query: string; rows: DbChunkRow[]; durationMs: number } | null> {
+  const startTime = Date.now();
+
+  // Create a timeout promise
+  const timeoutPromise = new Promise<null>((resolve) => {
+    setTimeout(() => resolve(null), VECTOR_RPC_TIMEOUT_MS);
+  });
+
+  // Create the RPC promise - pass embedding as array directly, not as string
+  const rpcPromise = supabase.rpc("match_chunks", {
+    query_embedding: embedding, // Pass as number[] array, not string
+    match_count: matchCount,
+  });
+
+  // Race between timeout and RPC
+  const result = await Promise.race([rpcPromise, timeoutPromise]);
+  const durationMs = Date.now() - startTime;
+
+  // Timeout occurred
+  if (result === null) {
+    logger.warn("match_chunks RPC timed out", {
+      stage: "retrieve",
+      query: query.slice(0, 50),
+      durationMs,
+      timeoutMs: VECTOR_RPC_TIMEOUT_MS,
+    });
+    return null;
+  }
+
+  const { data, error } = result;
+
+  if (error) {
+    logger.error("match_chunks RPC failed", {
+      stage: "retrieve",
+      query: query.slice(0, 50),
+      durationMs,
+      errorMessage: error.message,
+      errorCode: error.code,
+      errorDetails: error.details,
+      errorHint: error.hint,
+    });
+    return null;
+  }
+
+  return {
+    query,
+    rows: (data ?? []) as DbChunkRow[],
+    durationMs,
+  };
 }
 
 /**
  * Vector search using embeddings.
- * Expands the query and searches with each variation.
+ * Expands the query, generates embeddings in parallel, and searches in parallel.
  */
 async function vectorSearch(question: string, matchCount: number): Promise<VectorSearchResult> {
   const queries = await expandQuery(question);
+
+  // Generate all embeddings in parallel
+  const embeddingPromises = queries.map((q) => embedQuery(q));
+  const embeddings = await Promise.all(embeddingPromises);
+
+  // Execute all vector searches in parallel with Promise.allSettled
+  const searchPromises = queries.map((query, i) =>
+    executeVectorQuery(query, embeddings[i]!, matchCount)
+  );
+  const searchResults = await Promise.allSettled(searchPromises);
+
+  // Merge results, tracking failures
   const chunkMap = new Map<string, RetrievedChunk>();
+  let timedOut = 0;
+  let failed = 0;
+  const durations: number[] = [];
 
-  for (const query of queries) {
-    const embedding = await embedQuery(query);
-    const embeddingStr = `[${embedding.join(",")}]`;
-
-    const { data, error } = await supabase.rpc("match_chunks", {
-      query_embedding: embeddingStr,
-      match_count: matchCount,
-    });
-
-    if (error) {
-      logger.error("match_chunks RPC failed", {
-        stage: "retrieve",
-        query: query.slice(0, 50),
-        errorMessage: error.message,
-        errorCode: error.code,
-        errorDetails: error.details,
-        errorHint: error.hint,
-      });
+  for (const result of searchResults) {
+    if (result.status === "rejected") {
+      failed++;
       continue;
     }
 
-    const rows = (data ?? []) as DbChunkRow[];
+    const value = result.value;
+    if (value === null) {
+      timedOut++;
+      continue;
+    }
 
-    for (const row of rows) {
+    durations.push(value.durationMs);
+
+    for (const row of value.rows) {
       const existing = chunkMap.get(row.id);
       if (!existing || row.similarity > existing.similarity) {
         chunkMap.set(row.id, {
@@ -78,14 +147,22 @@ async function vectorSearch(question: string, matchCount: number): Promise<Vecto
   const results = Array.from(chunkMap.values());
   results.sort((a, b) => b.similarity - a.similarity);
 
+  const avgDuration = durations.length > 0
+    ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length)
+    : 0;
+
   logger.info("Vector search complete", {
     stage: "retrieve",
     queriesUsed: queries.length,
+    successful: queries.length - timedOut - failed,
+    timedOut,
+    failed,
     totalFound: results.length,
+    avgDurationMs: avgDuration,
     topSimilarity: results[0]?.similarity?.toFixed(3),
   });
 
-  return { chunks: results, queries };
+  return { chunks: results, queries, timedOut, failed };
 }
 
 export async function retrieveContext(question: string, matchCount = 8): Promise<RetrievalResult> {
@@ -95,7 +172,7 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
     keywordSearch(question, matchCount),
   ]);
 
-  const { chunks: vectorChunks, queries } = vectorResult;
+  const { chunks: vectorChunks, queries, timedOut, failed } = vectorResult;
 
   logger.info("Query expansion complete", {
     stage: "retrieve",
@@ -103,8 +180,28 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
     variationCount: queries.length - 1,
   });
 
+  // Determine if vector search is degraded (all failed/timed out)
+  const vectorDegraded = vectorChunks.length === 0 && (timedOut > 0 || failed > 0);
+
   // Merge vector and keyword results (hybrid search)
-  const mergedChunks = mergeSearchResults(vectorChunks, keywordResults, 0.7, 0.3);
+  // If vector is degraded, rely more heavily on keyword results
+  let mergedChunks: RetrievedChunk[];
+  if (vectorDegraded && keywordResults.length > 0) {
+    // Vector failed - use keyword results with boosted similarity scores
+    logger.warn("Vector search degraded, falling back to keyword-only", {
+      stage: "retrieve",
+      timedOut,
+      failed,
+      keywordResults: keywordResults.length,
+    });
+    // Boost keyword results so they pass similarity threshold
+    mergedChunks = keywordResults.map((chunk) => ({
+      ...chunk,
+      similarity: Math.max(chunk.similarity, MIN_SIMILARITY + 0.05),
+    }));
+  } else {
+    mergedChunks = mergeSearchResults(vectorChunks, keywordResults, 0.7, 0.3);
+  }
 
   // Take top results after merging
   const topChunks = mergedChunks.slice(0, matchCount * 2); // Take more for reranking
@@ -115,6 +212,7 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
   logger.info("Hybrid search complete", {
     stage: "retrieve",
     vectorResults: vectorChunks.length,
+    vectorDegraded,
     keywordResults: keywordResults.length,
     mergedTotal: mergedChunks.length,
     afterFilter: filteredChunks.length,
