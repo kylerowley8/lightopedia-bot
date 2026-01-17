@@ -356,8 +356,24 @@ export async function retrieveContext(question: string, matchCount = 8): Promise
     avgSimilarity >= MIN_SIMILARITY &&
     avgRelevance >= MIN_AVG_RELEVANCE;
 
+  // When vector search is degraded, be more lenient with confidence
+  // We have keyword results - let's try to answer and rely on the citation gate
+  if (vectorDegraded && rankedChunks.length >= MIN_CHUNKS_FOR_CONFIDENCE) {
+    // Keyword-only fallback: only require we have chunks and tokens
+    // The citation gate in answer generation will protect against bad answers
+    isConfident = totalTokens >= MIN_TOKENS_FOR_CONFIDENCE;
+    if (isConfident) {
+      lowConfidenceReason = "Answer based on keyword search only (vector search unavailable).";
+      logger.info("Using lenient confidence for keyword-only fallback", {
+        stage: "retrieve",
+        chunkCount: rankedChunks.length,
+        totalTokens,
+      });
+    }
+  }
+
   // Lower confidence for docs-only mode (no code verification)
-  if (retrievalMode === "docs_only" && isConfident) {
+  if (retrievalMode === "docs_only" && isConfident && !vectorDegraded) {
     // Require higher thresholds for docs-only answers
     isConfident = avgRelevance >= MIN_AVG_RELEVANCE + 1;
     if (!isConfident) {
