@@ -14,7 +14,8 @@ export async function indexDocument(
   repoFullName: string,
   filePath: string,
   content: string,
-  commitSha: string
+  commitSha: string,
+  options?: { force?: boolean }
 ): Promise<{ chunksCreated: number }> {
   const source = `${repoFullName}/${filePath}`;
 
@@ -24,17 +25,19 @@ export async function indexDocument(
     return { chunksCreated: 0 };
   }
 
-  // Check if already indexed at this commit
-  const { data: existing } = await supabase
-    .from("documents")
-    .select("id")
-    .eq("source", source)
-    .eq("commit_sha", commitSha)
-    .single();
+  // Check if already indexed at this commit (unless force is true)
+  if (!options?.force) {
+    const { data: existing } = await supabase
+      .from("documents")
+      .select("id")
+      .eq("source", source)
+      .eq("commit_sha", commitSha)
+      .single();
 
-  if (existing) {
-    console.log(`Already indexed: ${source} @ ${commitSha.slice(0, 7)}`);
-    return { chunksCreated: 0 };
+    if (existing) {
+      console.log(`Already indexed: ${source} @ ${commitSha.slice(0, 7)}`);
+      return { chunksCreated: 0 };
+    }
   }
 
   // Delete old version of this document

@@ -6,8 +6,9 @@ import { indexDocument } from "../indexer/index.js";
 import { shouldIndexPath } from "../indexer/config.js";
 import { supabase } from "../db/supabase.js";
 
-// Usage: npx tsx src/scripts/reindexRepo.ts <owner/repo> [branch]
+// Usage: npx tsx src/scripts/reindexRepo.ts <owner/repo> [branch] [--force]
 // Example: npx tsx src/scripts/reindexRepo.ts light-space/light main
+// Example: npx tsx src/scripts/reindexRepo.ts light-space/light main --force
 
 async function getInstallationId(octokit: Octokit, owner: string): Promise<number> {
   // List installations and find the one for this owner
@@ -44,13 +45,17 @@ async function getInstallationOctokit(installationId: number): Promise<Octokit> 
 async function main() {
   const args = process.argv.slice(2);
   if (args.length < 1) {
-    console.error("Usage: npx tsx src/scripts/reindexRepo.ts <owner/repo> [branch]");
+    console.error("Usage: npx tsx src/scripts/reindexRepo.ts <owner/repo> [branch] [--force]");
     console.error("Example: npx tsx src/scripts/reindexRepo.ts light-space/light main");
+    console.error("Example: npx tsx src/scripts/reindexRepo.ts light-space/light main --force");
     process.exit(1);
   }
 
-  const repoFullName = args[0]!;
-  const branch = args[1] || "main";
+  const forceIndex = args.includes("--force");
+  const nonFlagArgs = args.filter(a => !a.startsWith("--"));
+
+  const repoFullName = nonFlagArgs[0]!;
+  const branch = nonFlagArgs[1] || "main";
   const [owner, repo] = repoFullName.split("/") as [string, string];
 
   if (!owner || !repo) {
@@ -63,7 +68,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`\n🔄 Re-indexing ${repoFullName} (branch: ${branch})\n`);
+  console.log(`\n🔄 Re-indexing ${repoFullName} (branch: ${branch})${forceIndex ? " [FORCE MODE]" : ""}\n`);
 
   // Get installation
   const tempOctokit = new Octokit({
@@ -146,7 +151,7 @@ async function main() {
       });
       const content = Buffer.from(blob.content, "base64").toString("utf-8");
 
-      const result = await indexDocument(repoFullName, filePath, content, commitSha);
+      const result = await indexDocument(repoFullName, filePath, content, commitSha, { force: forceIndex });
 
       if (result.chunksCreated > 0) {
         indexed++;
