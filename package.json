@@ -1,17 +1,26 @@
 {
   "name": "lightopedia-bot",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:golden": "vitest run tests/router.golden.test.ts",
+    "test:indexer": "vitest run tests/indexer.config.test.ts",
+    "db:test": "tsx scripts/test-db-rpcs.ts",
     "dev": "tsx src/server.ts",
+    "dev:v2": "tsx src/server.v2.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "start:v2": "USE_V2=true node dist/server.v2.js",
+    "typecheck": "tsc --noEmit",
+    "index:docs": "tsx scripts/index-docs.ts",
+    "index:slack": "tsx scripts/index-slack.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
+  "description": "Internal Q&A bot for the Light platform",
   "dependencies": {
     "@octokit/auth-app": "^8.1.2",
     "@octokit/rest": "^22.0.1",
@@ -27,7 +36,8 @@
   "devDependencies": {
     "@types/node": "^25.0.9",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   },
   "type": "module"
 }

@@ -14,7 +14,16 @@ export type Stage =
   | "synthesize"
   | "render"
   | "index"
-  | "github";
+  | "github"
+  // V2 stages
+  | "router"
+  | "retrieval"
+  | "grounding"
+  | "llm"
+  | "pipeline"
+  | "evidence"
+  | "attachments"
+  | "indexer";
 
 interface LogContext {
   requestId?: string;

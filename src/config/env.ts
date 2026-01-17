@@ -9,6 +9,10 @@ const envSchema = z.object({
   // Server
   PORT: z.string().default("3000").transform(Number),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  USE_V2: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
 
   // Slack
   SLACK_BOT_TOKEN: z.string().min(1, "SLACK_BOT_TOKEN is required"),
@@ -25,6 +29,7 @@ const envSchema = z.object({
   GITHUB_WEBHOOK_SECRET: z.string().optional(),
   GITHUB_APP_ID: z.string().optional(),
   GITHUB_APP_PRIVATE_KEY: z.string().optional(),
+  GITHUB_TOKEN: z.string().optional(), // For indexing scripts
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -51,6 +56,7 @@ export const config = {
   port: env.PORT,
   isDev: env.NODE_ENV === "development",
   isProd: env.NODE_ENV === "production",
+  useV2: env.USE_V2,
 
   slack: {
     botToken: env.SLACK_BOT_TOKEN,

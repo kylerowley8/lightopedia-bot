@@ -16,4 +16,4 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm install -g tsx
 EXPOSE 3000
-CMD ["node", "dist/server.js"]
+CMD ["node", "dist/server.v2.js"]
