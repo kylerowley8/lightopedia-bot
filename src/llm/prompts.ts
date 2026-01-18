@@ -11,6 +11,17 @@ import type { Mode } from "../router/types.js";
 export const BASE_SYSTEM_PROMPT = `You are Lightopedia, an internal Q&A assistant for the Light platform.
 Your job is to explain what Light can do, how it works conceptually, and how to position it for customers.
 
+## Evidence Sources
+
+You have two types of evidence:
+1. **DOCS** (repo documentation) — Primary source of truth
+2. **SLACK** (curated #lightopedia threads) — Secondary, internal guidance
+
+### Source Priority Rules
+- DOCS always win over Slack if they conflict
+- Slack is useful when docs are thin or missing
+- If docs and Slack disagree, call it out: "The docs say X, but internal guidance suggests Y — recommend verifying with product team."
+
 ## Response Rules
 
 1. NON-TECHNICAL BY DEFAULT
@@ -30,6 +41,7 @@ Your job is to explain what Light can do, how it works conceptually, and how to 
    - Every factual claim MUST reference the provided context
    - Use [1], [2] etc. to cite sources
    - If you can't cite it, don't say it
+   - Prefer citing docs over Slack when both support a claim
 
 4. ADMIT UNCERTAINTY
    - If the context doesn't answer the question, say so
@@ -157,22 +169,41 @@ ${context}`;
 
 /**
  * Missing context fallback message.
+ * Used when no docs or Slack threads support an answer.
  */
 export function getMissingContextMessage(requestId: string): string {
-  return `I couldn't find information about this in the docs I have indexed.
+  return `I don't have documentation or internal guidance on this topic.
 
-Could you provide more context about what you're trying to do? If this turns out to be a gap in our documentation, feel free to submit a request in Linear.
+*What you can do:*
+• Provide more context about what you're trying to achieve
+• Check with the product/engineering team directly
+• Submit a feature request in Linear if this is a gap
+
+*To submit a Linear request:*
+1. Go to Linear → Light workspace
+2. Create new issue in the "Feature Requests" project
+3. Tag it with \`docs-gap\` so we can track documentation needs
 
 _${requestId}_`;
 }
 
 /**
  * Out of scope message.
+ * Used for implementation/code questions that V2 explicitly doesn't answer.
  */
 export function getOutOfScopeMessage(requestId: string): string {
-  return `This question asks about implementation details (like code behavior, retry logic, or specific customer data) that I don't have indexed yet.
+  return `This question is about implementation details (code behavior, runtime logic, specific customer data) which I don't cover.
 
-For deep technical questions, I'd recommend checking with the engineering team directly, or submitting a request in Linear to have this documented.
+Lightopedia answers from documentation and curated Slack threads only — not from source code.
+
+*For technical implementation questions:*
+• Ask in #engineering or the relevant team channel
+• Check the codebase directly with an engineer
+
+*If this should be documented:*
+1. Go to Linear → Light workspace
+2. Create new issue in "Feature Requests" with \`docs-gap\` label
+3. Describe what documentation would help
 
 _${requestId}_`;
 }

@@ -203,8 +203,8 @@ describe("Retrieval Integration", () => {
 
     const result = await retrieveDocs("test", route);
 
-    // Low similarity result should be filtered (MIN_SIMILARITY = 0.4)
-    expect(result.docs.every((d) => d.similarity >= 0.4)).toBe(true);
+    // Low similarity result should be filtered (MIN_SIMILARITY = 0.2)
+    expect(result.docs.every((d) => d.similarity >= 0.2)).toBe(true);
   });
 });
 
