@@ -175,11 +175,16 @@ slackApp.action(/^(feedback_helpful|feedback_not_helpful|show_technical|hide_tec
   const actionBody = body as {
     actions?: Array<{ action_id?: string; value?: string }>;
     user?: { id?: string };
+    channel?: { id?: string };
+    message?: { ts?: string; blocks?: unknown[] };
   };
 
   const actionId = actionBody.actions?.[0]?.action_id ?? "";
   const value = actionBody.actions?.[0]?.value ?? "";
   const userId = actionBody.user?.id ?? "unknown";
+  const channelId = actionBody.channel?.id;
+  const messageTs = actionBody.message?.ts;
+  const originalBlocks = actionBody.message?.blocks as Array<{ type: string; elements?: unknown[] }> | undefined;
 
   const result = await handleAction(actionId, value, userId);
 
@@ -189,10 +194,80 @@ slackApp.action(/^(feedback_helpful|feedback_not_helpful|show_technical|hide_tec
       actionId,
       error: result.error,
     });
+    return;
   }
 
-  // If updateMessage is true, would update the message here
-  // For now, just acknowledge
+  // Update the message to show feedback was recorded
+  if (channelId && messageTs && originalBlocks) {
+    try {
+      // For feedback actions, update the actions block to show confirmation
+      if (actionId === "feedback_helpful" || actionId === "feedback_not_helpful") {
+        const feedbackLabel = actionId === "feedback_helpful" ? "helpful" : "not helpful";
+        const updatedBlocks = originalBlocks.map((block) => {
+          if (block.type === "actions") {
+            // Replace action buttons with confirmation
+            return {
+              type: "context",
+              elements: [
+                {
+                  type: "mrkdwn",
+                  text: `_Thanks for your feedback! You marked this as ${feedbackLabel}._`,
+                },
+              ],
+            };
+          }
+          return block;
+        });
+
+        await (client as { chat: { update: (opts: unknown) => Promise<unknown> } }).chat.update({
+          channel: channelId,
+          ts: messageTs,
+          blocks: updatedBlocks,
+        });
+
+        logger.info("Updated message with feedback confirmation", {
+          stage: "slack",
+          actionId,
+          channelId,
+        });
+      }
+
+      // For show_technical, show a message that technical view is coming
+      if (actionId === "show_technical") {
+        // For now, just update the button text to indicate it was clicked
+        // Full implementation would cache pipeline results and re-render
+        const updatedBlocks = originalBlocks.map((block) => {
+          if (block.type === "actions" && Array.isArray(block.elements)) {
+            return {
+              ...block,
+              elements: (block.elements as Array<{ action_id?: string; text?: { type: string; text: string } }>).map((el) => {
+                if (el.action_id === "show_technical") {
+                  return {
+                    ...el,
+                    text: { type: "plain_text" as const, text: "Technical view coming soon" },
+                  };
+                }
+                return el;
+              }),
+            };
+          }
+          return block;
+        });
+
+        await (client as { chat: { update: (opts: unknown) => Promise<unknown> } }).chat.update({
+          channel: channelId,
+          ts: messageTs,
+          blocks: updatedBlocks,
+        });
+      }
+    } catch (err) {
+      logger.error("Failed to update message", {
+        stage: "slack",
+        actionId,
+        error: err,
+      });
+    }
+  }
 });
 
 // ============================================
