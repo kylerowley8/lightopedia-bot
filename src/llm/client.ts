@@ -80,15 +80,35 @@ export async function analyzeImage(
       // Fetch image with auth and convert to base64
       const response = await fetch(imageUrl, {
         headers: { Authorization: options.authHeader },
+        redirect: "follow",
       });
 
       if (!response.ok) {
         throw new Error(`Failed to fetch image: ${response.status}`);
       }
 
+      const contentType = response.headers.get("content-type") || "";
+
+      logger.info("Fetched image from Slack", {
+        stage: "llm",
+        contentType,
+        status: response.status,
+        url: imageUrl.slice(0, 50),
+      });
+
+      // Validate it's actually an image
+      if (!contentType.startsWith("image/")) {
+        const textPreview = await response.text();
+        logger.error("Slack returned non-image content", {
+          stage: "llm",
+          contentType,
+          preview: textPreview.slice(0, 200),
+        });
+        throw new Error(`Slack returned ${contentType} instead of image. Likely auth issue.`);
+      }
+
       const buffer = await response.arrayBuffer();
       const base64 = Buffer.from(buffer).toString("base64");
-      const contentType = response.headers.get("content-type") || "image/png";
 
       imageContent = {
         type: "image_url",
