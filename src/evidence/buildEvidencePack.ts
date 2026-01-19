@@ -34,8 +34,21 @@ export async function buildEvidencePack(
 
   // Extract attachment evidence if provided
   if (files && files.length > 0) {
+    logger.info("Processing attachments", {
+      stage: "evidence",
+      fileCount: files.length,
+      fileNames: files.map((f) => f.name),
+    });
+
     const attachments = await extractAttachments(files);
     pack.attachments = attachments;
+
+    logger.info("Attachments extracted", {
+      stage: "evidence",
+      extractedCount: attachments.length,
+      types: attachments.map((a) => a.type),
+      textLengths: attachments.map((a) => a.extractedText.length),
+    });
 
     // Use attachment identifiers to augment retrieval if helpful
     const identifiers = attachments.flatMap((a) => a.identifiers);
@@ -149,11 +162,12 @@ export function buildContextString(pack: EvidencePack): string {
     }
   }
 
-  // 4. Attachments
+  // 4. Attachments (images get more space since they contain extracted context)
   if (pack.attachments && pack.attachments.length > 0) {
     sections.push("\n=== USER ATTACHMENTS ===");
     for (const att of pack.attachments) {
-      sections.push(`[${citationIndex}] ATTACHMENT (${att.type})\n${att.extractedText.slice(0, 500)}`);
+      const maxLen = att.type === "image" ? 2000 : 500;
+      sections.push(`[${citationIndex}] ATTACHMENT (${att.type})\n${att.extractedText.slice(0, maxLen)}`);
       citationIndex++;
     }
   }
