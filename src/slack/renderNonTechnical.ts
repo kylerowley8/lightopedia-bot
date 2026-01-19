@@ -1,6 +1,6 @@
 // ============================================
-// Non-Technical Renderer — Default Slack output
-// Customer-ready, sales-safe, no code or jargon
+// Non-Technical Renderer — V3 Slack-Safe Template
+// Ship-ready, non-promissory, copy-paste safe for customers
 // ============================================
 
 import type { SlackResponse, SlackBlock, SlackButton } from "../app/types.js";
@@ -8,54 +8,127 @@ import type { PipelineResult } from "../app/types.js";
 import { buildCitationFooter } from "../grounding/citationGate.js";
 
 /**
- * Render a non-technical Slack response.
+ * Render a V3 Slack-safe response.
  *
- * Format:
- * - Customer-ready answer (1-3 sentences)
- * - Internal notes / next steps (if any)
- * - Confidence + source indicator
- * - "Show technical details" button
+ * Template (enforced structure):
+ * 1. Short answer (1 sentence)
+ * 2. Conceptual model (how Light thinks)
+ * 3. How it works in practice (bulleted flow)
+ * 4. Explicit boundaries (what Light does vs does not) - MANDATORY
+ * 5. Sales-ready summary (1 sentence)
  */
 export function renderNonTechnical(result: PipelineResult): SlackResponse {
   const { answer, metadata, evidence } = result;
   const blocks: SlackBlock[] = [];
+  const v3 = answer.v3;
 
-  // Main answer section
-  blocks.push({
-    type: "section",
-    text: {
-      type: "mrkdwn",
-      text: answer.summary,
-    },
-  });
-
-  // Claims as bullet points (simplified, no code references)
-  if (answer.claims.length > 0) {
-    const bullets = answer.claims
-      .map((claim) => `• ${claim.text}`)
-      .join("\n");
-
+  // If we have V3 structured answer, use the new template
+  if (v3 && v3.shortAnswer) {
+    // 1. Short answer
     blocks.push({
       type: "section",
       text: {
         type: "mrkdwn",
-        text: bullets,
+        text: v3.shortAnswer,
       },
     });
-  }
 
-  // Internal notes (if present)
-  if (answer.internalNotes) {
-    blocks.push({ type: "divider" });
-    blocks.push({
-      type: "context",
-      elements: [
-        {
+    // 2. Conceptual model
+    if (v3.conceptualModel) {
+      blocks.push({
+        type: "section",
+        text: {
           type: "mrkdwn",
-          text: `📝 *Internal note:* ${answer.internalNotes}`,
+          text: `*How Light models this:*\n${v3.conceptualModel}`,
         },
-      ],
+      });
+    }
+
+    // 3. How it works in practice
+    if (v3.howItWorks.length > 0) {
+      const steps = v3.howItWorks.map((step) => `• ${step}`).join("\n");
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `*In practice:*\n${steps}`,
+        },
+      });
+    }
+
+    // 4. Explicit boundaries (MANDATORY for V3)
+    if (v3.boundaries.whatLightDoes.length > 0 || v3.boundaries.whatLightDoesNot.length > 0) {
+      blocks.push({ type: "divider" });
+
+      if (v3.boundaries.whatLightDoes.length > 0) {
+        const does = v3.boundaries.whatLightDoes.map((item) => `✓ ${item}`).join("\n");
+        blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*What Light does:*\n${does}`,
+          },
+        });
+      }
+
+      if (v3.boundaries.whatLightDoesNot.length > 0) {
+        const doesNot = v3.boundaries.whatLightDoesNot.map((item) => `✗ ${item}`).join("\n");
+        blocks.push({
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*What Light does not:*\n${doesNot}`,
+          },
+        });
+      }
+    }
+
+    // 5. Sales-ready summary
+    if (v3.salesSummary) {
+      blocks.push({ type: "divider" });
+      blocks.push({
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `💬 *Sales summary:* ${v3.salesSummary}`,
+          },
+        ],
+      });
+    }
+  } else {
+    // Fallback to legacy format if V3 not available
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: answer.summary,
+      },
     });
+
+    if (answer.claims.length > 0) {
+      const bullets = answer.claims.map((claim) => `• ${claim.text}`).join("\n");
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: bullets,
+        },
+      });
+    }
+
+    if (answer.internalNotes) {
+      blocks.push({ type: "divider" });
+      blocks.push({
+        type: "context",
+        elements: [
+          {
+            type: "mrkdwn",
+            text: `📝 *Internal note:* ${answer.internalNotes}`,
+          },
+        ],
+      });
+    }
   }
 
   // Footer with confidence and source
@@ -72,20 +145,9 @@ export function renderNonTechnical(result: PipelineResult): SlackResponse {
     });
   }
 
-  // Actions: Show technical details + feedback
+  // Actions: feedback buttons
   const actions: SlackButton[] = [];
 
-  // Only show technical details button if we have evidence
-  if (evidence.docs.length > 0 || evidence.slackThreads.length > 0) {
-    actions.push({
-      type: "button",
-      text: { type: "plain_text", text: "Show technical details" },
-      action_id: "show_technical",
-      value: JSON.stringify({ requestId: metadata.requestId }),
-    });
-  }
-
-  // Feedback buttons
   actions.push({
     type: "button",
     text: { type: "plain_text", text: "✓ Helpful" },
@@ -117,7 +179,7 @@ export function renderNonTechnical(result: PipelineResult): SlackResponse {
   });
 
   return {
-    text: answer.summary,
+    text: v3?.shortAnswer || answer.summary,
     blocks,
   };
 }

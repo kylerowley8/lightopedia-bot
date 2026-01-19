@@ -1,5 +1,5 @@
 // ============================================
-// Build Evidence Pack — Assemble evidence for synthesis
+// Build Evidence Pack — V3: Code > Docs > Slack
 // ============================================
 
 import { retrieveDocs } from "../retrieval/docsRetrieval.js";
@@ -12,9 +12,10 @@ import type { SlackFile } from "../app/types.js";
 /**
  * Build a complete evidence pack for a question.
  *
- * V1 Strategy:
- * - Primary: Docs retrieval
- * - Secondary: Slack threads
+ * V3 Strategy (Code > Docs > Slack):
+ * - Primary: Code (ground truth for implementation)
+ * - Secondary: Docs (customer commitments)
+ * - Tertiary: Slack threads (internal guidance)
  * - Optional: User attachments
  */
 export async function buildEvidencePack(
@@ -79,59 +80,83 @@ async function extractAttachments(files: SlackFile[]): Promise<AttachmentEvidenc
  * Check if evidence pack has sufficient content.
  */
 export function hasEvidence(pack: EvidencePack): boolean {
-  return pack.docs.length > 0 || pack.slackThreads.length > 0;
+  return pack.codeChunks.length > 0 || pack.docs.length > 0 || pack.slackThreads.length > 0;
 }
 
 /**
  * Get top evidence items for context building.
  */
 export function getTopEvidence(pack: EvidencePack, limit: number = 6): string[] {
-  const evidence: Array<{ content: string; similarity: number }> = [];
+  const evidence: Array<{ content: string; similarity: number; priority: number }> = [];
 
-  // Add docs
+  // Add code (highest priority)
+  for (const code of pack.codeChunks) {
+    evidence.push({ content: code.content, similarity: code.similarity, priority: 3 });
+  }
+
+  // Add docs (medium priority)
   for (const doc of pack.docs) {
-    evidence.push({ content: doc.content, similarity: doc.similarity });
+    evidence.push({ content: doc.content, similarity: doc.similarity, priority: 2 });
   }
 
-  // Add Slack threads
+  // Add Slack threads (lower priority)
   for (const thread of pack.slackThreads) {
-    evidence.push({ content: thread.content, similarity: thread.similarity });
+    evidence.push({ content: thread.content, similarity: thread.similarity, priority: 1 });
   }
 
-  // Sort by similarity and take top N
+  // Sort by priority first, then similarity
   return evidence
-    .sort((a, b) => b.similarity - a.similarity)
+    .sort((a, b) => b.priority - a.priority || b.similarity - a.similarity)
     .slice(0, limit)
     .map((e) => e.content);
 }
 
 /**
  * Build formatted context string for LLM.
+ * V3 hierarchy: Code > Docs > Slack
  */
 export function buildContextString(pack: EvidencePack): string {
   const sections: string[] = [];
   let citationIndex = 1;
 
-  // Add docs with citation numbers
-  for (const doc of pack.docs.slice(0, 6)) {
-    const source = doc.metadata.path || doc.source;
-    sections.push(`[${citationIndex}] ${source}\n${doc.content}`);
-    citationIndex++;
-  }
-
-  // Add Slack threads
-  for (const thread of pack.slackThreads.slice(0, 3)) {
-    sections.push(`[${citationIndex}] Slack: ${thread.topic}\n${thread.content}`);
-    citationIndex++;
-  }
-
-  // Add attachments if present
-  if (pack.attachments && pack.attachments.length > 0) {
-    for (const att of pack.attachments) {
-      sections.push(`[${citationIndex}] User attachment (${att.type})\n${att.extractedText.slice(0, 500)}`);
+  // 1. CODE (ground truth for implementation)
+  if (pack.codeChunks.length > 0) {
+    sections.push("=== SOURCE CODE (Ground Truth) ===");
+    for (const code of pack.codeChunks.slice(0, 5)) {
+      const symbols = code.symbols.length > 0 ? ` [${code.symbols.join(", ")}]` : "";
+      const lines = code.startLine > 0 ? `:${code.startLine}-${code.endLine}` : "";
+      sections.push(`[${citationIndex}] CODE: ${code.path}${lines}${symbols}\n\`\`\`\n${code.content}\n\`\`\``);
       citationIndex++;
     }
   }
 
-  return sections.join("\n\n---\n\n");
+  // 2. DOCS (customer commitments)
+  if (pack.docs.length > 0) {
+    sections.push("\n=== DOCUMENTATION (Customer Commitments) ===");
+    for (const doc of pack.docs.slice(0, 5)) {
+      const source = doc.metadata.path || doc.source;
+      sections.push(`[${citationIndex}] DOC: ${source}\n${doc.content}`);
+      citationIndex++;
+    }
+  }
+
+  // 3. SLACK (internal guidance)
+  if (pack.slackThreads.length > 0) {
+    sections.push("\n=== SLACK (Internal Guidance) ===");
+    for (const thread of pack.slackThreads.slice(0, 3)) {
+      sections.push(`[${citationIndex}] SLACK: ${thread.topic}\n${thread.content}`);
+      citationIndex++;
+    }
+  }
+
+  // 4. Attachments
+  if (pack.attachments && pack.attachments.length > 0) {
+    sections.push("\n=== USER ATTACHMENTS ===");
+    for (const att of pack.attachments) {
+      sections.push(`[${citationIndex}] ATTACHMENT (${att.type})\n${att.extractedText.slice(0, 500)}`);
+      citationIndex++;
+    }
+  }
+
+  return sections.join("\n\n");
 }

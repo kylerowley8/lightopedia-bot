@@ -1,136 +1,106 @@
-import { supabase } from "../db/supabase.js";
-import { embedChunks } from "../retrieval/embeddings.js";
-import { chunkDocument } from "./chunker.js";
-import { shouldIndexPath } from "./config.js";
+// ============================================
+// Indexer — V3 Entry Point
+// Routes to appropriate indexer based on file type
+// ============================================
+
+import { indexDocument as indexDocDocument, indexRepo as indexDocRepo } from "./docsIndexer.js";
+import { indexCodeFile, indexCodeRepo } from "./codeIndexer.js";
+import { shouldIndexPath, isCodeFile, isDocFile } from "./config.js";
+import crypto from "crypto";
 
 export interface IndexResult {
   documentsProcessed: number;
   chunksCreated: number;
-  embeddingsCreated: number;
   errors: string[];
+  indexRunId: string;
 }
 
+/**
+ * Index a single file (routes to docs or code indexer).
+ */
 export async function indexDocument(
   repoFullName: string,
   filePath: string,
   content: string,
   commitSha: string,
-  options?: { force?: boolean }
-): Promise<{ chunksCreated: number }> {
-  const source = `${repoFullName}/${filePath}`;
-
-  // Check if we should index this file
+  options?: { force?: boolean; indexRunId?: string }
+): Promise<{ chunksCreated: number; skipped?: boolean }> {
   if (!shouldIndexPath(filePath)) {
     console.log(`Skipping ${filePath} (not in allowlist)`);
-    return { chunksCreated: 0 };
+    return { chunksCreated: 0, skipped: true };
   }
 
-  // Check if already indexed at this commit (unless force is true)
-  if (!options?.force) {
-    const { data: existing } = await supabase
-      .from("documents")
-      .select("id")
-      .eq("source", source)
-      .eq("commit_sha", commitSha)
-      .single();
+  const indexRunId = options?.indexRunId || crypto.randomUUID();
 
-    if (existing) {
-      console.log(`Already indexed: ${source} @ ${commitSha.slice(0, 7)}`);
-      return { chunksCreated: 0 };
-    }
+  if (isCodeFile(filePath)) {
+    const result = await indexCodeFile(
+      repoFullName,
+      filePath,
+      content,
+      commitSha,
+      indexRunId,
+      options
+    );
+    return { chunksCreated: result.chunksCreated, skipped: result.skipped };
   }
 
-  // Delete old version of this document
-  await supabase.from("documents").delete().eq("source", source);
-
-  // Insert new document
-  const { data: doc, error: docError } = await supabase
-    .from("documents")
-    .insert({
-      source,
-      title: extractTitle(content, filePath),
-      commit_sha: commitSha,
-    })
-    .select()
-    .single();
-
-  if (docError) throw docError;
-
-  // Chunk the document
-  const chunks = chunkDocument(content, source);
-  if (chunks.length === 0) {
-    console.log(`No chunks for ${source}`);
-    return { chunksCreated: 0 };
+  if (isDocFile(filePath)) {
+    const result = await indexDocDocument(
+      repoFullName,
+      filePath,
+      content,
+      commitSha,
+      indexRunId,
+      options
+    );
+    return { chunksCreated: result.chunksCreated, skipped: result.skipped };
   }
 
-  // Insert chunks
-  const chunkRows = chunks.map((c) => ({
-    document_id: doc.id,
-    chunk_index: c.index,
-    content: c.content,
-    metadata: c.metadata,
-  }));
-
-  const { data: insertedChunks, error: chunkError } = await supabase
-    .from("chunks")
-    .insert(chunkRows)
-    .select("id");
-
-  if (chunkError) throw chunkError;
-
-  // Generate and insert embeddings
-  const embeddings = await embedChunks(chunks.map((c) => c.content));
-
-  const embeddingRows = insertedChunks.map((chunk, i) => ({
-    chunk_id: chunk.id,
-    embedding: embeddings[i],
-  }));
-
-  const { error: embError } = await supabase.from("chunk_embeddings").insert(embeddingRows);
-
-  if (embError) throw embError;
-
-  console.log(`Indexed ${source}: ${chunks.length} chunks`);
-  return { chunksCreated: chunks.length };
+  console.log(`Skipping ${filePath} (unknown file type)`);
+  return { chunksCreated: 0, skipped: true };
 }
 
+/**
+ * Index multiple files from a repo.
+ */
 export async function indexRepo(
   repoFullName: string,
   files: { path: string; content: string }[],
-  commitSha: string
+  commitSha: string,
+  options?: { force?: boolean }
 ): Promise<IndexResult> {
+  const indexRunId = crypto.randomUUID();
   const result: IndexResult = {
     documentsProcessed: 0,
     chunksCreated: 0,
-    embeddingsCreated: 0,
     errors: [],
+    indexRunId,
   };
 
-  for (const file of files) {
-    try {
-      const { chunksCreated } = await indexDocument(repoFullName, file.path, file.content, commitSha);
-      if (chunksCreated > 0) {
-        result.documentsProcessed++;
-        result.chunksCreated += chunksCreated;
-        result.embeddingsCreated += chunksCreated;
-      }
-    } catch (err) {
-      const msg = `Failed to index ${file.path}: ${err}`;
-      console.error(msg);
-      result.errors.push(msg);
-    }
+  // Separate files by type
+  const docFiles = files.filter((f) => isDocFile(f.path) && shouldIndexPath(f.path));
+  const codeFiles = files.filter((f) => isCodeFile(f.path) && shouldIndexPath(f.path));
+
+  console.log(`\nIndexing ${docFiles.length} doc files and ${codeFiles.length} code files...`);
+
+  // Index docs
+  if (docFiles.length > 0) {
+    const docResult = await indexDocRepo(repoFullName, docFiles, commitSha, options);
+    result.documentsProcessed += docResult.documentsProcessed;
+    result.chunksCreated += docResult.chunksCreated;
+    result.errors.push(...docResult.errors);
+  }
+
+  // Index code
+  if (codeFiles.length > 0) {
+    const codeResult = await indexCodeRepo(repoFullName, codeFiles, commitSha, options);
+    result.documentsProcessed += codeResult.filesProcessed;
+    result.chunksCreated += codeResult.chunksCreated;
+    result.errors.push(...codeResult.errors);
   }
 
   return result;
 }
 
-function extractTitle(content: string, filePath: string): string {
-  // Try to extract title from first heading
-  const match = content.match(/^#\s+(.+)$/m);
-  const heading = match?.[1];
-  if (heading) return heading;
-
-  // Fall back to filename
-  const parts = filePath.split("/");
-  return parts[parts.length - 1] ?? filePath;
-}
+// Re-export useful functions from config
+export { shouldIndexPath, isCodeFile, isDocFile } from "./config.js";

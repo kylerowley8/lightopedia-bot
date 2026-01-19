@@ -10,7 +10,7 @@
 /**
  * Source type for indexed content.
  */
-export type SourceType = "repo" | "slack";
+export type SourceType = "repo" | "slack" | "code";
 
 /**
  * Versioning metadata stored with every chunk.
@@ -44,7 +44,6 @@ export type IndexMetadata = {
 
 /**
  * A chunk of documentation (markdown, notion, etc.)
- * Primary evidence type for V1.
  */
 export type DocChunk = {
   /** Unique chunk ID (for citation reference) */
@@ -60,6 +59,37 @@ export type DocChunk = {
   content: string;
 
   /** Similarity score from retrieval */
+  similarity: number;
+
+  /** Versioning metadata */
+  metadata: IndexMetadata;
+};
+
+/**
+ * A chunk of source code (Kotlin, TypeScript).
+ * V3: Code is ground truth for implementation behavior.
+ */
+export type CodeChunk = {
+  /** Unique chunk ID */
+  id: string;
+
+  /** File path (e.g., "src/billing/InvoiceService.kt") */
+  path: string;
+
+  /** Symbols in this chunk (class/function names) */
+  symbols: string[];
+
+  /** Line range */
+  startLine: number;
+  endLine: number;
+
+  /** Chunk type */
+  chunkType: "class" | "function" | "module" | "block";
+
+  /** Code content */
+  content: string;
+
+  /** Similarity score */
   similarity: number;
 
   /** Versioning metadata */
@@ -109,14 +139,17 @@ export type AttachmentEvidence = {
 
 /**
  * Complete evidence package for a query.
- * V1 is DOCS-FIRST: primary evidence is documentation.
- * Assembled by retrieval, consumed by synthesis.
+ * V3 hierarchy: Code > Docs > Slack
+ * Code is ground truth, Docs are commitments, Slack is guidance.
  */
 export type EvidencePack = {
-  /** Primary documentation evidence (V1 main source) */
+  /** Source code evidence - ground truth for implementation (V3 primary) */
+  codeChunks: CodeChunk[];
+
+  /** Documentation evidence - customer commitments */
   docs: DocChunk[];
 
-  /** Curated Slack threads from #lightopedia (secondary) */
+  /** Curated Slack threads from #lightopedia - internal guidance */
   slackThreads: SlackThread[];
 
   /** User-provided attachments (optional) */
@@ -171,6 +204,33 @@ export type ConfidenceLevel =
   | "needs_clarification";      // Insufficient evidence
 
 /**
+ * V3 Answer structure - sales-safe, non-promissory format.
+ * Follows the enforced Slack template structure.
+ */
+export type V3Answer = {
+  /** 1 sentence direct answer with appropriate framing */
+  shortAnswer: string;
+
+  /** How Light models/thinks about this (1-2 sentences) */
+  conceptualModel: string;
+
+  /** Operational steps - how it works in practice */
+  howItWorks: string[];
+
+  /** Explicit boundaries - what Light does vs does not */
+  boundaries: {
+    whatLightDoes: string[];
+    whatLightDoesNot: string[];
+  };
+
+  /** One reusable line for customer conversations */
+  salesSummary: string;
+
+  /** Citation references (evidence indices) */
+  citations: string[];
+};
+
+/**
  * A fully grounded answer ready for rendering.
  * All claims have citations (enforced by citation gate).
  */
@@ -189,6 +249,9 @@ export type GroundedAnswer = {
 
   /** Internal notes for follow-up (optional) */
   internalNotes?: string;
+
+  /** V3 structured answer (when available) */
+  v3?: V3Answer;
 };
 
 /**
@@ -203,6 +266,7 @@ export type DraftAnswer = {
   }>;
   suggestedConfidence: ConfidenceLevel;
   internalNotes?: string;
+  v3?: V3Answer;
 };
 
 // ============================================
@@ -227,6 +291,7 @@ export const RETRIEVAL_VERSION = "retrieval.v1.0";
  */
 export function createEmptyEvidencePack(indexRunId: string): EvidencePack {
   return {
+    codeChunks: [],
     docs: [],
     slackThreads: [],
     attachments: [],

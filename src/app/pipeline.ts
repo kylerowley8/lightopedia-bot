@@ -177,6 +177,7 @@ function buildFallbackResult(
   return {
     route,
     evidence: {
+      codeChunks: [],
       docs: [],
       slackThreads: [],
       retrievalMeta: {
@@ -216,6 +217,7 @@ function buildClarifyResult(
   return {
     route,
     evidence: {
+      codeChunks: [],
       docs: [],
       slackThreads: [],
       retrievalMeta: {

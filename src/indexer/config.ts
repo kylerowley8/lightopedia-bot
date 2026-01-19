@@ -1,6 +1,6 @@
 // ============================================
-// Indexing Config — V1 Scope Enforcement
-// See INDEXING_SCOPE.md for full contract
+// Indexing Config — V3 Scope: Code + Docs + Slack
+// Code is ground truth, Docs are commitments, Slack is guidance
 // ============================================
 
 // ============================================
@@ -24,50 +24,35 @@ export const ALLOWED_SLACK_CHANNELS = {
 } as const;
 
 // ============================================
-// File Patterns — DOCS ONLY (V1)
-// No executable code.
+// File Patterns — V3: Code + Docs
 // ============================================
 
-export const ALLOW_PATHS = [
-  // Root-level docs
+// Documentation patterns
+export const DOC_PATTERNS = [
   "README.md",
   "*.md",
   "*.mdx",
-  // docs directory
   "docs/**",
   "docs/**/*.md",
   "docs/**/*.mdx",
-  // Nested markdown anywhere
   "**/*.md",
   "**/*.mdx",
 ];
 
-// Explicit exclusions
-export const EXCLUDE_PATTERNS = [
-  // Executable code
+// Code patterns (Kotlin + TypeScript)
+export const CODE_PATTERNS = [
   "**/*.kt",
   "**/*.kts",
-  "**/*.java",
   "**/*.ts",
   "**/*.tsx",
-  "**/*.js",
-  "**/*.jsx",
-  "**/*.py",
-  "**/*.go",
-  "**/*.rs",
-  "**/*.swift",
-  "**/*.scala",
+];
 
-  // Config (executable)
-  "**/*.json",
-  "**/*.yaml",
-  "**/*.yml",
-  "**/*.toml",
-  "**/*.xml",
-  "**/*.gradle",
-  "**/*.properties",
+// Combined allow patterns
+export const ALLOW_PATHS = [...DOC_PATTERNS, ...CODE_PATTERNS];
 
-  // Build artifacts (multiple patterns for better matching)
+// Explicit exclusions
+export const EXCLUDE_PATTERNS = [
+  // Build artifacts
   "dist/**",
   "**/dist/**",
   "build/**",
@@ -91,8 +76,10 @@ export const EXCLUDE_PATTERNS = [
   "**/package-lock.json",
   "**/yarn.lock",
   "**/pnpm-lock.yaml",
+  "**/*.d.ts",
+  "**/*.generated.*",
 
-  // Tests
+  // Tests (still exclude for now)
   "**/*.test.*",
   "**/*.spec.*",
   "**/__tests__/**",
@@ -138,7 +125,7 @@ export function isAllowedSlackChannel(channelId: string): boolean {
 
 /**
  * Check if a file path should be indexed.
- * Enforces V1 scope: docs only, no executable code.
+ * V3 scope: docs + code.
  */
 export function shouldIndexPath(path: string): boolean {
   // Check exclusions first (deny takes priority)
@@ -157,6 +144,20 @@ export function shouldIndexPath(path: string): boolean {
 
   // Default deny
   return false;
+}
+
+/**
+ * Check if a path is a code file (Kotlin or TypeScript).
+ */
+export function isCodeFile(path: string): boolean {
+  return /\.(kt|kts|ts|tsx)$/i.test(path);
+}
+
+/**
+ * Check if a path is a doc file (Markdown).
+ */
+export function isDocFile(path: string): boolean {
+  return /\.(md|mdx)$/i.test(path);
 }
 
 /**

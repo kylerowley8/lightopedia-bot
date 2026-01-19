@@ -23,7 +23,9 @@ export type Stage =
   | "pipeline"
   | "evidence"
   | "attachments"
-  | "indexer";
+  | "indexer"
+  // V3 stages
+  | "guardrails";
 
 interface LogContext {
   requestId?: string;

@@ -6,13 +6,29 @@ import { generateCompletion, parseJsonResponse, SYNTHESIS_MODEL } from "./client
 import { buildSynthesisPrompt, buildUserMessage } from "./prompts.js";
 import { buildContextString } from "../evidence/buildEvidencePack.js";
 import { logger } from "../lib/logger.js";
-import type { DraftAnswer, EvidencePack, Citation } from "../evidence/types.js";
+import type { DraftAnswer, EvidencePack, Citation, V3Answer } from "../evidence/types.js";
 import type { Mode, RouteDecision } from "../router/types.js";
+import { enforceForbiddenPhrases } from "../grounding/forbiddenPhrases.js";
 
 /**
- * Raw LLM response structure.
+ * V3 Raw LLM response structure.
  */
-interface LLMResponse {
+interface LLMResponseV3 {
+  shortAnswer: string;
+  conceptualModel: string;
+  howItWorks: string[];
+  boundaries: {
+    whatLightDoes: string[];
+    whatLightDoesNot: string[];
+  };
+  salesSummary: string;
+  citations: string[];
+}
+
+/**
+ * Legacy LLM response structure (for fallback).
+ */
+interface LLMResponseLegacy {
   summary: string;
   claims: Array<{
     text: string;
@@ -23,11 +39,15 @@ interface LLMResponse {
 }
 
 /**
- * Default empty response.
+ * Default empty V3 response.
  */
-const EMPTY_RESPONSE: LLMResponse = {
-  summary: "",
-  claims: [],
+const EMPTY_RESPONSE_V3: LLMResponseV3 = {
+  shortAnswer: "",
+  conceptualModel: "",
+  howItWorks: [],
+  boundaries: { whatLightDoes: [], whatLightDoesNot: [] },
+  salesSummary: "",
+  citations: [],
 };
 
 /**
@@ -47,6 +67,7 @@ export async function synthesizeAnswer(
   logger.info("Starting synthesis", {
     stage: "synthesize",
     mode,
+    codeCount: evidence.codeChunks.length,
     docCount: evidence.docs.length,
     slackCount: evidence.slackThreads.length,
   });
@@ -75,9 +96,9 @@ export async function synthesizeAnswer(
   }
 
   // Handle no evidence
-  if (evidence.docs.length === 0 && evidence.slackThreads.length === 0) {
+  if (evidence.codeChunks.length === 0 && evidence.docs.length === 0 && evidence.slackThreads.length === 0) {
     return {
-      summary: "I couldn't find information about this in the docs I have indexed.",
+      summary: "I couldn't find information about this in the codebase or docs I have indexed.",
       claims: [],
       suggestedConfidence: "needs_clarification",
     };
@@ -91,42 +112,72 @@ export async function synthesizeAnswer(
   const rawResponse = await generateCompletion(systemPrompt, userMessage, {
     model: SYNTHESIS_MODEL,
     temperature: 0.3,
-    maxTokens: 800,
+    maxTokens: 1000,
     jsonMode: true,
   });
 
-  // Parse response
-  const parsed = parseJsonResponse<LLMResponse>(rawResponse, EMPTY_RESPONSE);
+  // Parse V3 response
+  const parsed = parseJsonResponse<LLMResponseV3>(rawResponse, EMPTY_RESPONSE_V3);
 
-  // Transform to DraftAnswer
-  const draft = transformToDraft(parsed, evidence);
+  // Transform to DraftAnswer with V3 structure
+  const draft = transformToDraftV3(parsed, evidence);
 
   logger.info("Synthesis complete", {
     stage: "synthesize",
-    claimCount: draft.claims.length,
-    hasSummary: !!draft.summary,
+    hasShortAnswer: !!draft.v3?.shortAnswer,
+    hasBoundaries: (draft.v3?.boundaries.whatLightDoes.length ?? 0) > 0,
   });
 
   return draft;
 }
 
 /**
- * Transform LLM response to DraftAnswer.
+ * Transform V3 LLM response to DraftAnswer.
  */
-function transformToDraft(
-  response: LLMResponse,
+function transformToDraftV3(
+  response: LLMResponseV3,
   evidence: EvidencePack
 ): DraftAnswer {
-  const claims = response.claims.map((claim) => ({
-    text: claim.text,
-    citations: claim.citations.map((ref) => resolveCitation(ref, evidence)),
-  }));
+  // Build V3 answer structure
+  const rawV3Answer: V3Answer = {
+    shortAnswer: response.shortAnswer || "",
+    conceptualModel: response.conceptualModel || "",
+    howItWorks: response.howItWorks || [],
+    boundaries: {
+      whatLightDoes: response.boundaries?.whatLightDoes || [],
+      whatLightDoesNot: response.boundaries?.whatLightDoesNot || [],
+    },
+    salesSummary: response.salesSummary || "",
+    citations: response.citations || [],
+  };
+
+  // Apply V3 guardrails - enforce forbidden phrases
+  const v3Answer = enforceForbiddenPhrases(rawV3Answer);
+
+  // Build legacy claims from V3 structure for backward compatibility
+  const claims: Array<{ text: string; citations: Citation[] }> = [];
+
+  // Add conceptual model as a claim if present
+  if (v3Answer.conceptualModel) {
+    claims.push({
+      text: v3Answer.conceptualModel,
+      citations: v3Answer.citations.map((ref) => resolveCitation(ref, evidence)),
+    });
+  }
+
+  // Add howItWorks steps as claims
+  for (const step of v3Answer.howItWorks) {
+    claims.push({
+      text: step,
+      citations: v3Answer.citations.map((ref) => resolveCitation(ref, evidence)),
+    });
+  }
 
   return {
-    summary: response.summary || "I found some relevant information.",
+    summary: v3Answer.shortAnswer || "I found some relevant information.",
     claims,
-    suggestedConfidence: claims.length > 0 ? "confirmed_docs" : "needs_clarification",
-    internalNotes: response.internalNotes,
+    suggestedConfidence: v3Answer.shortAnswer ? "confirmed_docs" : "needs_clarification",
+    v3: v3Answer,
   };
 }
 

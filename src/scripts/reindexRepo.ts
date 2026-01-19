@@ -93,12 +93,12 @@ async function main() {
   const commitSha = refData.object.sha;
   console.log(`Latest commit: ${commitSha.slice(0, 7)}`);
 
-  // Delete old documents from this repo
+  // Delete old documents from this repo (from docs table)
   console.log(`\nDeleting old documents from ${repoFullName}...`);
   const { error: deleteError } = await supabase
-    .from("documents")
+    .from("docs")
     .delete()
-    .like("source", `${repoFullName}%`);
+    .eq("metadata->>repo_slug", repoFullName);
 
   if (deleteError) {
     console.error("Error deleting old documents:", deleteError);

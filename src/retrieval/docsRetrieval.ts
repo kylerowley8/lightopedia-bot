@@ -1,5 +1,5 @@
 // ============================================
-// Docs-First Retrieval — V1 Primary Evidence Source
+// V3 Retrieval — Code > Docs > Slack hierarchy
 // ============================================
 
 import { supabase } from "../db/supabase.js";
@@ -7,6 +7,7 @@ import { embedQuery } from "./embeddings.js";
 import { logger } from "../lib/logger.js";
 import {
   type DocChunk,
+  type CodeChunk,
   type SlackThread,
   type EvidencePack,
   type IndexMetadata,
@@ -21,7 +22,8 @@ import crypto from "crypto";
 // ============================================
 
 const MIN_SIMILARITY = 0.2;
-const MAX_DOC_RESULTS = 8;
+const MAX_CODE_RESULTS = 6;  // V3: Code is primary evidence
+const MAX_DOC_RESULTS = 6;
 const MAX_SLACK_RESULTS = 4;
 const VECTOR_TIMEOUT_MS = 5000;
 
@@ -30,14 +32,13 @@ const VECTOR_TIMEOUT_MS = 5000;
 // ============================================
 
 /**
- * Retrieve docs-first evidence for a question.
+ * Retrieve evidence for a question.
  *
- * V1 retrieval strategy:
+ * V3 retrieval strategy (Code > Docs > Slack):
  * 1. Expand query using hints from router
- * 2. Search docs (primary)
- * 3. Search Slack threads (secondary)
- * 4. Merge and deduplicate
- * 5. Build EvidencePack with metadata
+ * 2. Search all sources (code, docs, Slack) in parallel
+ * 3. Separate code chunks from doc chunks
+ * 4. Build EvidencePack with hierarchical evidence
  */
 export async function retrieveDocs(
   question: string,
@@ -46,7 +47,7 @@ export async function retrieveDocs(
   const indexRunId = crypto.randomUUID();
   const pack = createEmptyEvidencePack(indexRunId);
 
-  logger.info("Starting docs retrieval", {
+  logger.info("Starting V3 retrieval", {
     stage: "retrieval",
     mode: route.mode,
     question: question.slice(0, 80),
@@ -57,25 +58,59 @@ export async function retrieveDocs(
   const queries = buildSearchQueries(question, route.queryHints);
   pack.retrievalMeta.queriesUsed = queries;
 
-  // Search docs and Slack in parallel
-  const [docResults, slackResults] = await Promise.all([
-    searchDocs(queries, MAX_DOC_RESULTS),
+  // Search all sources in parallel
+  const [allDocsResults, slackResults] = await Promise.all([
+    searchDocs(queries, MAX_CODE_RESULTS + MAX_DOC_RESULTS),
     searchSlackThreads(queries, MAX_SLACK_RESULTS),
   ]);
 
-  pack.docs = docResults;
-  pack.slackThreads = slackResults;
-  pack.retrievalMeta.totalSearched = docResults.length + slackResults.length;
+  // Separate code chunks from doc chunks based on source_type
+  const codeChunks: CodeChunk[] = [];
+  const docChunks: DocChunk[] = [];
 
-  logger.info("Docs retrieval complete", {
+  for (const result of allDocsResults) {
+    if (result.metadata.sourceType === "code") {
+      codeChunks.push(transformToCodeChunk(result));
+    } else {
+      docChunks.push(result);
+    }
+  }
+
+  // Apply limits
+  pack.codeChunks = codeChunks.slice(0, MAX_CODE_RESULTS);
+  pack.docs = docChunks.slice(0, MAX_DOC_RESULTS);
+  pack.slackThreads = slackResults;
+  pack.retrievalMeta.totalSearched =
+    pack.codeChunks.length + pack.docs.length + pack.slackThreads.length;
+
+  logger.info("V3 retrieval complete", {
     stage: "retrieval",
-    docCount: docResults.length,
-    slackCount: slackResults.length,
-    topDocSimilarity: docResults[0]?.similarity?.toFixed(3),
-    topSlackSimilarity: slackResults[0]?.similarity?.toFixed(3),
+    codeCount: pack.codeChunks.length,
+    docCount: pack.docs.length,
+    slackCount: pack.slackThreads.length,
+    topCodeSimilarity: pack.codeChunks[0]?.similarity?.toFixed(3),
+    topDocSimilarity: pack.docs[0]?.similarity?.toFixed(3),
   });
 
   return pack;
+}
+
+/**
+ * Transform a DocChunk (with code metadata) to a CodeChunk.
+ */
+function transformToCodeChunk(doc: DocChunk): CodeChunk {
+  const meta = doc.metadata as any; // Extended metadata from code indexer
+  return {
+    id: doc.id,
+    path: meta.path || doc.source,
+    symbols: meta.symbols || [],
+    startLine: meta.start_line || 0,
+    endLine: meta.end_line || 0,
+    chunkType: meta.chunk_type || "block",
+    content: doc.content,
+    similarity: doc.similarity,
+    metadata: doc.metadata,
+  };
 }
 
 // ============================================
