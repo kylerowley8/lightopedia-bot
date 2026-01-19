@@ -59,6 +59,73 @@ export async function generateCompletion(
 }
 
 /**
+ * Analyze an image using GPT-4V vision.
+ * Returns extracted text, UI elements, and context.
+ */
+export async function analyzeImage(
+  imageUrl: string,
+  prompt: string,
+  options: {
+    authHeader?: string;
+    maxTokens?: number;
+  } = {}
+): Promise<string> {
+  const { maxTokens = 1000 } = options;
+
+  try {
+    // If we have an auth header, we need to fetch and convert to base64
+    let imageContent: { type: "image_url"; image_url: { url: string } };
+
+    if (options.authHeader) {
+      // Fetch image with auth and convert to base64
+      const response = await fetch(imageUrl, {
+        headers: { Authorization: options.authHeader },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.status}`);
+      }
+
+      const buffer = await response.arrayBuffer();
+      const base64 = Buffer.from(buffer).toString("base64");
+      const contentType = response.headers.get("content-type") || "image/png";
+
+      imageContent = {
+        type: "image_url",
+        image_url: { url: `data:${contentType};base64,${base64}` },
+      };
+    } else {
+      imageContent = {
+        type: "image_url",
+        image_url: { url: imageUrl },
+      };
+    }
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: prompt },
+            imageContent,
+          ],
+        },
+      ],
+      max_tokens: maxTokens,
+    });
+
+    return response.choices[0]?.message?.content ?? "";
+  } catch (err) {
+    logger.error("Image analysis failed", {
+      stage: "llm",
+      error: err,
+    });
+    throw err;
+  }
+}
+
+/**
  * Parse JSON from LLM response, with fallback.
  */
 export function parseJsonResponse<T>(response: string, fallback: T): T {

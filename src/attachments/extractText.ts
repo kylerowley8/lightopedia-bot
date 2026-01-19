@@ -3,15 +3,35 @@
 // ============================================
 
 import { logger } from "../lib/logger.js";
+import { analyzeImage } from "../llm/client.js";
+import { config } from "../config/env.js";
 import type { AttachmentEvidence } from "../evidence/types.js";
 import type { SlackFile } from "../app/types.js";
 
 /**
+ * Image analysis prompt.
+ * Extracts text, UI elements, and context from screenshots.
+ */
+const IMAGE_ANALYSIS_PROMPT = `Analyze this screenshot and extract all relevant information.
+
+Focus on:
+1. **Text content** - Extract all visible text, labels, buttons, menu items
+2. **UI context** - What screen/dialog/form is shown? What application?
+3. **Data shown** - Any IDs, numbers, dates, status values, error messages
+4. **User action** - What is the user trying to do or asking about?
+
+Format your response as:
+TEXT: [all visible text, line by line]
+CONTEXT: [1-2 sentence description of what this screenshot shows]
+IDENTIFIERS: [any IDs, error codes, or specific values that could help search]
+USER_INTENT: [what the user might be asking about based on this image]`;
+
+/**
  * Extract text and identifiers from a Slack file attachment.
  *
- * V1 supports:
+ * Supports:
  * - Plain text / log files
- * - (Future: Images via OCR, PDFs)
+ * - Images (screenshots, UI captures) via GPT-4V
  */
 export async function extractAttachmentText(
   file: SlackFile
@@ -35,13 +55,17 @@ export async function extractAttachmentText(
     return null;
   }
 
-  // For V1, only handle text-based files
+  // Handle text/log files
   if (type === "log") {
     return await extractLogFile(file);
   }
 
-  // Image and PDF extraction would go here in future
-  // For now, return null for unsupported types
+  // Handle images via GPT-4V vision
+  if (type === "image") {
+    return await extractImageFile(file);
+  }
+
+  // PDF extraction not yet implemented
   return null;
 }
 
@@ -77,16 +101,93 @@ function getAttachmentType(
 }
 
 /**
+ * Extract content from an image file using GPT-4V vision.
+ */
+async function extractImageFile(file: SlackFile): Promise<AttachmentEvidence | null> {
+  try {
+    logger.info("Analyzing image with GPT-4V", {
+      stage: "attachments",
+      fileName: file.name,
+    });
+
+    // Use Slack bot token to authenticate the image download
+    const authHeader = `Bearer ${config.slack.botToken}`;
+
+    // Analyze image with GPT-4V
+    const analysis = await analyzeImage(file.url, IMAGE_ANALYSIS_PROMPT, {
+      authHeader,
+      maxTokens: 1500,
+    });
+
+    // Extract identifiers from the analysis
+    const identifiers = extractIdentifiersFromAnalysis(analysis);
+
+    logger.info("Image analysis complete", {
+      stage: "attachments",
+      fileName: file.name,
+      extractedLength: analysis.length,
+      identifierCount: identifiers.length,
+    });
+
+    return {
+      type: "image",
+      extractedText: analysis,
+      identifiers,
+      slackFileId: file.id,
+    };
+  } catch (err) {
+    logger.error("Failed to analyze image", {
+      stage: "attachments",
+      fileName: file.name,
+      error: err,
+    });
+    return null;
+  }
+}
+
+/**
+ * Extract identifiers from GPT-4V analysis output.
+ */
+function extractIdentifiersFromAnalysis(analysis: string): string[] {
+  const identifiers: string[] = [];
+
+  // Look for IDENTIFIERS section
+  const identifiersMatch = analysis.match(/IDENTIFIERS:\s*(.+?)(?:\n[A-Z_]+:|$)/s);
+  if (identifiersMatch) {
+    const idText = identifiersMatch[1]!;
+    // Split by commas, newlines, or common separators
+    const ids = idText.split(/[,\n;]/).map((s) => s.trim()).filter((s) => s.length > 0 && s !== "None" && s !== "N/A");
+    identifiers.push(...ids);
+  }
+
+  // Also extract any UUIDs found in the full text
+  const uuids = analysis.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi);
+  if (uuids) {
+    identifiers.push(...uuids.slice(0, 5));
+  }
+
+  // Extract error codes
+  const errorCodes = analysis.match(/\b[A-Z][A-Z0-9_]{3,30}\b/g);
+  if (errorCodes) {
+    // Filter out common words that aren't identifiers
+    const filtered = errorCodes.filter((code) =>
+      !["TEXT", "CONTEXT", "IDENTIFIERS", "USER_INTENT", "NONE", "THE", "AND", "FOR"].includes(code)
+    );
+    identifiers.push(...filtered.slice(0, 5));
+  }
+
+  return [...new Set(identifiers)];
+}
+
+/**
  * Extract text from a log/text file.
  */
 async function extractLogFile(file: SlackFile): Promise<AttachmentEvidence | null> {
   try {
-    // Fetch file content
-    // Note: In production, would use Slack API with auth token
-    // For now, this is a placeholder
+    // Fetch file content with Slack auth
     const response = await fetch(file.url, {
       headers: {
-        // Would need: Authorization: `Bearer ${slackToken}`
+        Authorization: `Bearer ${config.slack.botToken}`,
       },
     });
 
