@@ -112,12 +112,21 @@ export async function synthesizeAnswer(
   const rawResponse = await generateCompletion(systemPrompt, userMessage, {
     model: SYNTHESIS_MODEL,
     temperature: 0.3,
-    maxTokens: 1000,
+    maxTokens: 2000,
     jsonMode: true,
   });
 
   // Parse V3 response
   const parsed = parseJsonResponse<LLMResponseV3>(rawResponse, EMPTY_RESPONSE_V3);
+
+  logger.info("LLM raw response parsed", {
+    stage: "synthesize",
+    hasShortAnswer: !!parsed.shortAnswer,
+    howItWorksCount: parsed.howItWorks?.length ?? 0,
+    boundariesDoes: parsed.boundaries?.whatLightDoes?.length ?? 0,
+    boundariesDoesNot: parsed.boundaries?.whatLightDoesNot?.length ?? 0,
+    rawResponseLength: rawResponse.length,
+  });
 
   // Transform to DraftAnswer with V3 structure
   const draft = transformToDraftV3(parsed, evidence);
@@ -126,6 +135,7 @@ export async function synthesizeAnswer(
     stage: "synthesize",
     hasShortAnswer: !!draft.v3?.shortAnswer,
     hasBoundaries: (draft.v3?.boundaries.whatLightDoes.length ?? 0) > 0,
+    howItWorksCount: draft.v3?.howItWorks.length ?? 0,
   });
 
   return draft;
