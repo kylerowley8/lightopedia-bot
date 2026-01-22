@@ -1,5 +1,5 @@
 // ============================================
-// Google OAuth via Supabase Auth
+// Auth Handlers — Email/Password via Supabase Auth
 // ============================================
 
 import type { Request, Response } from "express";
@@ -10,94 +10,128 @@ import { createServerSupabase, setSessionCookies, clearSessionCookies } from "./
 const ALLOWED_DOMAIN = "light.inc";
 
 /**
- * Handle GET /auth/login — Redirect to Supabase OAuth.
+ * Handle POST /auth/signup — Create a new account.
  */
-export function handleLogin(_req: Request, res: Response): void {
+export async function handleSignup(req: Request, res: Response): Promise<void> {
+  const { email, password } = req.body as { email?: string; password?: string };
+
+  if (!email || !password) {
+    res.status(400).json({ message: "Email and password are required" });
+    return;
+  }
+
+  // Validate @light.inc email
+  if (!email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+    res.status(400).json({ message: "Only @light.inc email addresses are allowed" });
+    return;
+  }
+
+  if (password.length < 8) {
+    res.status(400).json({ message: "Password must be at least 8 characters" });
+    return;
+  }
+
   const supabase = createServerSupabase();
 
-  // Build the OAuth URL
-  const redirectTo = `${config.supabase.url}/auth/v1/authorize?` +
-    new URLSearchParams({
-      provider: "google",
-      redirect_to: config.googleOAuth.redirectUri || `${getBaseUrl()}/auth/callback`,
-      hd: ALLOWED_DOMAIN, // Hint to Google to show only @light.inc accounts
-    }).toString();
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+  });
 
-  res.redirect(redirectTo);
+  if (error) {
+    logger.error("Signup failed", {
+      stage: "auth",
+      error: error.message,
+    });
+    res.status(400).json({ message: error.message });
+    return;
+  }
+
+  // Check if email confirmation is required
+  if (data.user && !data.session) {
+    logger.info("User signed up, confirmation required", {
+      stage: "auth",
+      email,
+    });
+    res.json({ confirmEmail: true });
+    return;
+  }
+
+  // If session exists, set cookies and redirect
+  if (data.session) {
+    setSessionCookies(
+      res,
+      data.session.access_token,
+      data.session.refresh_token,
+      data.session.expires_in
+    );
+
+    logger.info("User signed up and logged in", {
+      stage: "auth",
+      userId: data.user?.id,
+      email,
+    });
+
+    res.json({ success: true });
+    return;
+  }
+
+  res.status(500).json({ message: "Unexpected error during signup" });
 }
 
 /**
- * Handle GET /auth/callback — OAuth callback from Supabase.
+ * Handle POST /auth/signin — Sign in with email/password.
  */
-export async function handleCallback(req: Request, res: Response): Promise<void> {
-  const { code, error, error_description } = req.query as {
-    code?: string;
-    error?: string;
-    error_description?: string;
-  };
+export async function handleSignin(req: Request, res: Response): Promise<void> {
+  const { email, password } = req.body as { email?: string; password?: string };
 
-  // Check for OAuth error
-  if (error) {
-    logger.warn("OAuth error from Supabase", {
-      stage: "auth",
-      error,
-      description: error_description,
-    });
-    res.redirect(`/auth/login?error=${encodeURIComponent(error)}`);
+  if (!email || !password) {
+    res.status(400).json({ message: "Email and password are required" });
     return;
   }
 
-  if (!code) {
-    res.redirect("/auth/login?error=no_code");
+  // Validate @light.inc email
+  if (!email.endsWith(`@${ALLOWED_DOMAIN}`)) {
+    res.status(400).json({ message: "Only @light.inc email addresses are allowed" });
     return;
   }
 
   const supabase = createServerSupabase();
 
-  // Exchange code for session
-  const { data, error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-
-  if (exchangeError || !data.session) {
-    logger.error("Failed to exchange code for session", {
-      stage: "auth",
-      error: exchangeError?.message,
-    });
-    res.redirect("/auth/login?error=exchange_failed");
-    return;
-  }
-
-  const { session, user } = data;
-
-  // Verify email domain (server-side check)
-  if (!user.email?.endsWith(`@${ALLOWED_DOMAIN}`)) {
-    logger.warn("OAuth rejected: invalid domain", {
-      stage: "auth",
-      email: user.email,
-    });
-
-    // Sign out the user since they're not allowed
-    await supabase.auth.signOut();
-
-    res.redirect("/auth/login?error=invalid_domain");
-    return;
-  }
-
-  // Set session cookies
-  setSessionCookies(
-    res,
-    session.access_token,
-    session.refresh_token,
-    session.expires_in
-  );
-
-  logger.info("User logged in via Supabase", {
-    stage: "auth",
-    userId: user.id,
-    email: user.email,
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
   });
 
-  // Redirect to dashboard
-  res.redirect("/dashboard");
+  if (error) {
+    logger.warn("Signin failed", {
+      stage: "auth",
+      email,
+      error: error.message,
+    });
+    res.status(401).json({ message: "Invalid email or password" });
+    return;
+  }
+
+  if (!data.session) {
+    res.status(401).json({ message: "Authentication failed" });
+    return;
+  }
+
+  setSessionCookies(
+    res,
+    data.session.access_token,
+    data.session.refresh_token,
+    data.session.expires_in
+  );
+
+  logger.info("User signed in", {
+    stage: "auth",
+    userId: data.user.id,
+    email,
+  });
+
+  res.json({ success: true });
 }
 
 /**
@@ -108,13 +142,11 @@ export async function handleLogout(_req: Request, res: Response): Promise<void> 
   res.redirect("/auth/login");
 }
 
-/**
- * Get base URL from config or default.
- */
-function getBaseUrl(): string {
-  // In production, use the known URL
-  if (config.isProd) {
-    return "https://lightopedia.fly.dev";
-  }
-  return `http://localhost:${config.port}`;
+// Keep these for backward compatibility (Google OAuth)
+export function handleLogin(_req: Request, res: Response): void {
+  res.redirect("/auth/login");
+}
+
+export async function handleCallback(req: Request, res: Response): Promise<void> {
+  res.redirect("/auth/login?error=Google OAuth not configured");
 }

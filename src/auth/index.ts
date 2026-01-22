@@ -2,7 +2,7 @@
 // Auth Module Exports
 // ============================================
 
-export { handleLogin, handleCallback, handleLogout } from "./oauth.js";
+export { handleLogin, handleCallback, handleLogout, handleSignup, handleSignin } from "./oauth.js";
 export { requireAuth, type AuthenticatedDashboardRequest } from "./middleware.js";
 export {
   getSessionFromRequest,

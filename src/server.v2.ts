@@ -26,7 +26,7 @@ import {
   handleAskRequest,
   handleHealthCheck,
 } from "./api/index.js";
-import { handleLogin, handleCallback, handleLogout } from "./auth/index.js";
+import { handleLogin, handleCallback, handleLogout, handleSignup, handleSignin } from "./auth/index.js";
 import { createDashboardRouter, createAuthRouter } from "./dashboard/index.js";
 import type { SlackInput, SlackFile } from "./app/types.js";
 import type { ThreadMessage } from "./router/types.js";
@@ -474,40 +474,28 @@ app.use(cookieParser());
 app.get("/healthz", (_req, res) => res.status(200).send("ok"));
 
 // ============================================
-// Auth & Dashboard Routes
+// Auth & Dashboard Routes (Supabase Auth)
 // ============================================
 
-if (config.googleOAuth.isConfigured) {
-  // Auth routes
-  const authRouter = createAuthRouter();
-  app.use("/auth", authRouter);
+// Auth routes - login page served from static HTML
+const authRouter = createAuthRouter();
+app.use("/auth", authRouter);
 
-  // OAuth handlers (separate from static login page)
-  app.get("/auth/login", handleLogin);
-  app.get("/auth/callback", handleCallback);
-  app.post("/auth/logout", handleLogout);
+// Auth handlers
+app.post("/auth/signup", express.json(), handleSignup);
+app.post("/auth/signin", express.json(), handleSignin);
+app.post("/auth/logout", handleLogout);
 
-  // Dashboard routes
-  app.use("/dashboard", express.json(), createDashboardRouter());
+// Legacy OAuth handlers (Google)
+app.get("/auth/google", handleLogin);
+app.get("/auth/callback", handleCallback);
 
-  logger.info("Dashboard routes enabled", {
-    stage: "startup",
-  });
-} else {
-  // Dashboard not configured - return helpful message
-  app.get("/dashboard", (_req, res) => {
-    res.status(503).json({
-      error: "DASHBOARD_NOT_CONFIGURED",
-      message: "The dashboard is not configured. Please set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, and SESSION_SECRET environment variables.",
-    });
-  });
-  app.get("/auth/login", (_req, res) => {
-    res.status(503).json({
-      error: "AUTH_NOT_CONFIGURED",
-      message: "Google OAuth is not configured.",
-    });
-  });
-}
+// Dashboard routes
+app.use("/dashboard", express.json(), createDashboardRouter());
+
+logger.info("Dashboard routes enabled (Supabase Auth)", {
+  stage: "startup",
+});
 
 // Debug endpoint - version info
 app.get("/debug/version", (_req, res) => {
