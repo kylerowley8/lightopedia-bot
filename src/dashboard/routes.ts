@@ -21,7 +21,7 @@ const createKeySchema = z.object({
  */
 export async function handleListKeys(req: Request, res: Response): Promise<void> {
   const authReq = req as AuthenticatedDashboardRequest;
-  const userId = authReq.session.userId;
+  const userId = authReq.user.id;
 
   try {
     const keys = await listUserApiKeys(userId);
@@ -44,7 +44,7 @@ export async function handleListKeys(req: Request, res: Response): Promise<void>
  */
 export async function handleCreateKey(req: Request, res: Response): Promise<void> {
   const authReq = req as AuthenticatedDashboardRequest;
-  const userId = authReq.session.userId;
+  const userId = authReq.user.id;
 
   // Validate input
   const result = createKeySchema.safeParse(req.body);
@@ -97,7 +97,7 @@ export async function handleCreateKey(req: Request, res: Response): Promise<void
  */
 export async function handleRevokeKey(req: Request, res: Response): Promise<void> {
   const authReq = req as AuthenticatedDashboardRequest;
-  const userId = authReq.session.userId;
+  const userId = authReq.user.id;
   const keyIdParam = req.params["id"];
   const keyId = Array.isArray(keyIdParam) ? keyIdParam[0] : keyIdParam;
 
@@ -148,9 +148,9 @@ export function handleGetMe(req: Request, res: Response): void {
   const authReq = req as AuthenticatedDashboardRequest;
 
   res.json({
-    userId: authReq.session.userId,
-    email: authReq.session.email,
-    name: authReq.session.name,
-    pictureUrl: authReq.session.pictureUrl,
+    userId: authReq.user.id,
+    email: authReq.user.email,
+    name: authReq.user.name,
+    pictureUrl: authReq.user.pictureUrl,
   });
 }

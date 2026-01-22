@@ -1,127 +1,129 @@
 // ============================================
-// Session Management — HMAC-signed JWT cookies
+// Session Management — Supabase Auth
 // ============================================
 
-import crypto from "crypto";
-import type { Response, Request } from "express";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { Request, Response } from "express";
 import { config } from "../config/env.js";
 
-const COOKIE_NAME = "lightopedia_session";
-const SESSION_EXPIRY_DAYS = 7;
-const SESSION_EXPIRY_MS = SESSION_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+const COOKIE_NAME = "sb-access-token";
+const REFRESH_COOKIE_NAME = "sb-refresh-token";
 
-export interface SessionPayload {
-  userId: string;
+export interface SessionUser {
+  id: string;
   email: string;
   name?: string;
   pictureUrl?: string;
-  exp: number; // Expiration timestamp
 }
 
 /**
- * Create an HMAC signature for a payload.
+ * Create a Supabase client for server-side auth operations.
  */
-function sign(payload: string, secret: string): string {
-  return crypto.createHmac("sha256", secret).update(payload).digest("base64url");
+export function createServerSupabase(): SupabaseClient {
+  return createClient(config.supabase.url, config.supabase.serviceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
 }
 
 /**
- * Verify an HMAC signature.
+ * Parse session cookies from request.
  */
-function verify(payload: string, signature: string, secret: string): boolean {
-  const expected = sign(payload, secret);
-  // Use timing-safe comparison
-  if (signature.length !== expected.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
+function getTokensFromCookies(req: Request): { accessToken?: string; refreshToken?: string } {
+  const cookies = req.cookies as Record<string, string> | undefined;
+  return {
+    accessToken: cookies?.[COOKIE_NAME],
+    refreshToken: cookies?.[REFRESH_COOKIE_NAME],
+  };
 }
 
 /**
- * Create a session token (base64url encoded payload + signature).
+ * Set session cookies on response.
  */
-export function createSessionToken(data: Omit<SessionPayload, "exp">): string {
-  const secret = config.session.secret;
-  if (!secret) throw new Error("SESSION_SECRET not configured");
-
-  const payload: SessionPayload = {
-    ...data,
-    exp: Date.now() + SESSION_EXPIRY_MS,
+export function setSessionCookies(
+  res: Response,
+  accessToken: string,
+  refreshToken: string,
+  expiresIn: number
+): void {
+  const cookieOptions = {
+    httpOnly: true,
+    secure: config.isProd,
+    sameSite: "lax" as const,
+    path: "/",
   };
 
-  const payloadStr = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  const signature = sign(payloadStr, secret);
+  res.cookie(COOKIE_NAME, accessToken, {
+    ...cookieOptions,
+    maxAge: expiresIn * 1000,
+  });
 
-  return `${payloadStr}.${signature}`;
+  res.cookie(REFRESH_COOKIE_NAME, refreshToken, {
+    ...cookieOptions,
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  });
 }
 
 /**
- * Verify and decode a session token.
- * Returns null if invalid or expired.
+ * Clear session cookies.
  */
-export function verifySessionToken(token: string): SessionPayload | null {
-  const secret = config.session.secret;
-  if (!secret) return null;
+export function clearSessionCookies(res: Response): void {
+  const cookieOptions = {
+    httpOnly: true,
+    secure: config.isProd,
+    sameSite: "lax" as const,
+    path: "/",
+  };
 
-  const parts = token.split(".");
-  if (parts.length !== 2) return null;
+  res.clearCookie(COOKIE_NAME, cookieOptions);
+  res.clearCookie(REFRESH_COOKIE_NAME, cookieOptions);
+}
 
-  const [payloadStr, signature] = parts;
-  if (!payloadStr || !signature) return null;
+/**
+ * Get session user from request cookies.
+ * Returns null if not authenticated or session expired.
+ */
+export async function getSessionFromRequest(req: Request): Promise<SessionUser | null> {
+  const { accessToken, refreshToken } = getTokensFromCookies(req);
 
-  // Verify signature
-  if (!verify(payloadStr, signature, secret)) {
+  if (!accessToken) {
     return null;
   }
 
-  // Decode payload
-  try {
-    const payload = JSON.parse(
-      Buffer.from(payloadStr, "base64url").toString("utf8")
-    ) as SessionPayload;
+  const supabase = createServerSupabase();
 
-    // Check expiration
-    if (payload.exp < Date.now()) {
-      return null;
+  // Verify the access token
+  const { data: { user }, error } = await supabase.auth.getUser(accessToken);
+
+  if (error || !user) {
+    // Try refresh if we have a refresh token
+    if (refreshToken) {
+      const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession({
+        refresh_token: refreshToken,
+      });
+
+      if (!refreshError && refreshData.user && refreshData.session) {
+        // Return user but note: cookies won't be updated here
+        // The middleware should handle setting new cookies
+        const metadata = refreshData.user.user_metadata as Record<string, unknown> | undefined;
+        return {
+          id: refreshData.user.id,
+          email: refreshData.user.email!,
+          name: metadata?.["full_name"] as string | undefined,
+          pictureUrl: metadata?.["avatar_url"] as string | undefined,
+        };
+      }
     }
-
-    return payload;
-  } catch {
     return null;
   }
-}
 
-/**
- * Set session cookie on response.
- */
-export function setSessionCookie(res: Response, token: string): void {
-  res.cookie(COOKIE_NAME, token, {
-    httpOnly: true,
-    secure: config.isProd,
-    sameSite: "lax",
-    maxAge: SESSION_EXPIRY_MS,
-    path: "/",
-  });
-}
-
-/**
- * Clear session cookie.
- */
-export function clearSessionCookie(res: Response): void {
-  res.clearCookie(COOKIE_NAME, {
-    httpOnly: true,
-    secure: config.isProd,
-    sameSite: "lax",
-    path: "/",
-  });
-}
-
-/**
- * Get session from request cookies.
- */
-export function getSessionFromRequest(req: Request): SessionPayload | null {
-  const cookies = req.cookies as Record<string, string> | undefined;
-  const token = cookies?.[COOKIE_NAME];
-
-  if (!token) return null;
-
-  return verifySessionToken(token);
+  const metadata = user.user_metadata as Record<string, unknown> | undefined;
+  return {
+    id: user.id,
+    email: user.email!,
+    name: metadata?.["full_name"] as string | undefined,
+    pictureUrl: metadata?.["avatar_url"] as string | undefined,
+  };
 }

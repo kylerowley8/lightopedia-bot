@@ -1,28 +1,28 @@
 // ============================================
-// Auth Middleware — Session-based authentication
+// Auth Middleware — Supabase session-based authentication
 // ============================================
 
 import type { Request, Response, NextFunction } from "express";
-import { getSessionFromRequest, type SessionPayload } from "./session.js";
+import { getSessionFromRequest, type SessionUser } from "./session.js";
 
 export interface AuthenticatedDashboardRequest extends Request {
-  session: SessionPayload;
+  user: SessionUser;
 }
 
 /**
  * Middleware to require authentication for dashboard routes.
  * Redirects to login page if not authenticated.
  */
-export function requireAuth(
+export async function requireAuth(
   req: Request,
   res: Response,
   next: NextFunction
-): void {
-  const session = getSessionFromRequest(req);
+): Promise<void> {
+  const user = await getSessionFromRequest(req);
 
-  if (!session) {
+  if (!user) {
     // For API requests, return JSON error
-    if (req.path.startsWith("/dashboard/api/")) {
+    if (req.path.startsWith("/api/")) {
       res.status(401).json({
         error: "UNAUTHORIZED",
         message: "Session expired or invalid. Please log in again.",
@@ -35,23 +35,7 @@ export function requireAuth(
     return;
   }
 
-  // Attach session to request
-  (req as AuthenticatedDashboardRequest).session = session;
-  next();
-}
-
-/**
- * Middleware to optionally attach session if present.
- * Does not require authentication.
- */
-export function attachSession(
-  req: Request,
-  _res: Response,
-  next: NextFunction
-): void {
-  const session = getSessionFromRequest(req);
-  if (session) {
-    (req as AuthenticatedDashboardRequest).session = session;
-  }
+  // Attach user to request
+  (req as AuthenticatedDashboardRequest).user = user;
   next();
 }

@@ -37,11 +37,8 @@ const envSchema = z.object({
   API_RATE_LIMIT_MAX_REQUESTS: z.string().default("20").transform(Number), // 20 req/min default
   API_ALLOWED_ORIGINS: z.string().default(""), // Comma-separated origins, or "*" for all
 
-  // Google OAuth (optional - only needed if using self-service API key dashboard)
-  GOOGLE_CLIENT_ID: z.string().optional(),
-  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  // Dashboard (optional - redirect URI for OAuth callback, dashboard enabled if Supabase is configured)
   GOOGLE_REDIRECT_URI: z.string().url().optional(),
-  SESSION_SECRET: z.string().min(32).optional(), // At least 32 chars for HMAC signing
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -127,15 +124,9 @@ export const config = {
   },
 
   googleOAuth: {
-    clientId: env.GOOGLE_CLIENT_ID,
-    clientSecret: env.GOOGLE_CLIENT_SECRET,
     redirectUri: env.GOOGLE_REDIRECT_URI,
-    isConfigured: Boolean(
-      env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_REDIRECT_URI && env.SESSION_SECRET
-    ),
   },
 
-  session: {
-    secret: env.SESSION_SECRET,
-  },
+  // Dashboard is enabled when Supabase is configured (Google OAuth configured in Supabase Dashboard)
+  dashboardEnabled: true,
 } as const;

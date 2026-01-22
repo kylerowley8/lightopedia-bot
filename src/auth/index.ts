@@ -3,12 +3,11 @@
 // ============================================
 
 export { handleLogin, handleCallback, handleLogout } from "./oauth.js";
-export { requireAuth, attachSession, type AuthenticatedDashboardRequest } from "./middleware.js";
+export { requireAuth, type AuthenticatedDashboardRequest } from "./middleware.js";
 export {
-  createSessionToken,
-  verifySessionToken,
-  setSessionCookie,
-  clearSessionCookie,
   getSessionFromRequest,
-  type SessionPayload,
+  setSessionCookies,
+  clearSessionCookies,
+  createServerSupabase,
+  type SessionUser,
 } from "./session.js";
