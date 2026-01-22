@@ -27,6 +27,7 @@
     "@octokit/webhooks": "^14.2.0",
     "@slack/bolt": "^4.6.0",
     "@supabase/supabase-js": "^2.90.1",
+    "cookie-parser": "^1.4.7",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "node-html-parser": "^7.0.2",
@@ -35,6 +36,7 @@
     "zod": "^4.3.5"
   },
   "devDependencies": {
+    "@types/cookie-parser": "^1.4.8",
     "@types/node": "^25.0.9",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

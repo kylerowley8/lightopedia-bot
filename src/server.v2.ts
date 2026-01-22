@@ -5,16 +5,31 @@
 
 import "dotenv/config";
 import express from "express";
+import cookieParser from "cookie-parser";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const { App, ExpressReceiver } = require("@slack/bolt");
 
 import { config } from "./config/env.js";
 import { logger } from "./lib/logger.js";
-import { handleSlackQuestion, fetchThreadHistory } from "./app/handleSlackQuestion.js";
+import { handleSlackQuestion } from "./app/handleSlackQuestion.js";
 import { handleAction } from "./slack/actions.js";
+import { cacheDetailedAnswer } from "./lib/answerCache.js";
 import { handleGitHubWebhook } from "./github/webhook.js";
-import type { SlackInput } from "./app/types.js";
+import {
+  authenticateApiKey,
+  rateLimit,
+  validateBody,
+  askRequestSchema,
+  addRequestId,
+  corsMiddleware,
+  handleAskRequest,
+  handleHealthCheck,
+} from "./api/index.js";
+import { handleLogin, handleCallback, handleLogout } from "./auth/index.js";
+import { createDashboardRouter, createAuthRouter } from "./dashboard/index.js";
+import type { SlackInput, SlackFile } from "./app/types.js";
+import type { ThreadMessage } from "./router/types.js";
 
 // ============================================
 // Slack App Setup
@@ -49,6 +64,7 @@ interface SlackMessage {
     name: string;
     mimetype: string;
     url_private: string;
+    url_private_download?: string;
     size: number;
   }>;
 }
@@ -61,10 +77,108 @@ interface SlackClient {
   conversations: {
     replies: (params: { channel: string; ts: string; limit?: number }) => Promise<{
       ok: boolean;
-      messages?: Array<{ type: string; user?: string; bot_id?: string; text?: string; ts: string; subtype?: string }>;
+      messages?: Array<{
+        type: string;
+        user?: string;
+        bot_id?: string;
+        text?: string;
+        ts: string;
+        subtype?: string;
+        files?: Array<{
+          id: string;
+          name: string;
+          mimetype: string;
+          url_private: string;
+          url_private_download?: string;
+          size: number;
+        }>;
+      }>;
       error?: string;
     }>;
   };
+}
+
+/**
+ * Fetch thread history AND files from thread messages.
+ * Returns both conversation history and any files attached to thread messages.
+ */
+async function fetchThreadHistoryWithFiles(
+  client: SlackClient,
+  channelId: string,
+  threadTs: string,
+  currentMessageTs: string,
+  botUserId?: string
+): Promise<{ history: ThreadMessage[]; files: SlackFile[] }> {
+  try {
+    const result = await client.conversations.replies({
+      channel: channelId,
+      ts: threadTs,
+      limit: 50,
+    });
+
+    if (!result.ok || !result.messages) {
+      logger.warn("Failed to fetch thread history", {
+        stage: "slack",
+        channelId,
+        threadTs,
+        error: result.error,
+      });
+      return { history: [], files: [] };
+    }
+
+    const history: ThreadMessage[] = [];
+    const files: SlackFile[] = [];
+
+    for (const msg of result.messages) {
+      // Skip current message for history (but still get its files below)
+      if (msg.ts !== currentMessageTs) {
+        // Add text to history
+        if (msg.text) {
+          const isBotMessage =
+            msg.bot_id !== undefined ||
+            (botUserId !== undefined && msg.user === botUserId);
+
+          const cleanText = msg.text.replace(/<@[^>]+>\s*/g, "").trim();
+          if (cleanText) {
+            history.push({
+              role: isBotMessage ? "assistant" : "user",
+              content: cleanText,
+              timestamp: msg.ts,
+            });
+          }
+        }
+      }
+
+      // Extract files from ALL messages (including current, but we filter duplicates later)
+      if (msg.files && msg.ts !== currentMessageTs) {
+        for (const f of msg.files) {
+          files.push({
+            id: f.id,
+            name: f.name,
+            mimetype: f.mimetype,
+            url: f.url_private_download || f.url_private,
+            size: f.size,
+          });
+        }
+      }
+    }
+
+    // Sort history by timestamp (oldest first)
+    history.sort((a, b) => parseFloat(a.timestamp) - parseFloat(b.timestamp));
+
+    return {
+      history: history.slice(-6),
+      files,
+    };
+  } catch (err) {
+    logger.error("Error fetching thread history with files", {
+      stage: "slack",
+      channelId,
+      threadTs,
+      error: err,
+    });
+    return { history: [], files: [] };
+  }
 }
 
 /**
@@ -92,7 +206,7 @@ async function handleQuestion(
       id: f.id,
       name: f.name,
       mimetype: f.mimetype,
-      url: f.url_private,
+      url: f.url_private_download || f.url_private,
       size: f.size,
     })),
   };
@@ -110,8 +224,8 @@ async function handleQuestion(
     logger.error("Failed to post pending message", { stage: "slack", error: err });
   }
 
-  // Fetch thread history
-  const threadHistory = await fetchThreadHistory(
+  // Fetch thread history and files from thread
+  const { history: threadHistory, files: threadFiles } = await fetchThreadHistoryWithFiles(
     client,
     message.channel,
     threadTs,
@@ -119,8 +233,25 @@ async function handleQuestion(
     botUserId
   );
 
+  // Merge thread files with current message files (thread files first, then current)
+  const allFiles = [...threadFiles, ...(input.files || [])];
+  if (allFiles.length > 0) {
+    input.files = allFiles;
+    logger.info("Files found in thread", {
+      stage: "slack",
+      threadFileCount: threadFiles.length,
+      currentFileCount: (message.files || []).length,
+      totalFiles: allFiles.length,
+    });
+  }
+
   // Handle the question
-  const response = await handleSlackQuestion(input, threadHistory);
+  const { response, requestId, detailedAnswer } = await handleSlackQuestion(input, threadHistory);
+
+  // Cache detailed answer if present
+  if (detailedAnswer && requestId !== "error") {
+    cacheDetailedAnswer(requestId, detailedAnswer, threadTs, message.channel);
+  }
 
   // Update or post response
   try {
@@ -169,14 +300,14 @@ slackApp.message(async ({ message, client, context }: { message: unknown; client
 // Action Handlers
 // ============================================
 
-slackApp.action(/^(feedback_helpful|feedback_not_helpful|show_technical|hide_technical)$/, async ({ ack, body, client }: { ack: () => Promise<void>; body: unknown; client: unknown }) => {
+slackApp.action(/^(feedback_helpful|feedback_not_helpful|show_technical|hide_technical|show_more_details)$/, async ({ ack, body, client }: { ack: () => Promise<void>; body: unknown; client: unknown }) => {
   await ack();
 
   const actionBody = body as {
     actions?: Array<{ action_id?: string; value?: string }>;
     user?: { id?: string };
     channel?: { id?: string };
-    message?: { ts?: string; blocks?: unknown[] };
+    message?: { ts?: string; thread_ts?: string; blocks?: unknown[] };
   };
 
   const actionId = actionBody.actions?.[0]?.action_id ?? "";
@@ -184,6 +315,7 @@ slackApp.action(/^(feedback_helpful|feedback_not_helpful|show_technical|hide_tec
   const userId = actionBody.user?.id ?? "unknown";
   const channelId = actionBody.channel?.id;
   const messageTs = actionBody.message?.ts;
+  const threadTs = actionBody.message?.thread_ts || messageTs;
   const originalBlocks = actionBody.message?.blocks as Array<{ type: string; elements?: unknown[] }> | undefined;
 
   const result = await handleAction(actionId, value, userId);
@@ -194,6 +326,65 @@ slackApp.action(/^(feedback_helpful|feedback_not_helpful|show_technical|hide_tec
       actionId,
       error: result.error,
     });
+
+    // For show_more_details failure, post an error message
+    if (actionId === "show_more_details" && channelId && threadTs) {
+      try {
+        await (client as SlackClient).chat.postMessage({
+          channel: channelId,
+          thread_ts: threadTs,
+          text: result.error || "Sorry, I couldn't retrieve the details.",
+        });
+      } catch (err) {
+        logger.error("Failed to post error message", { stage: "slack", error: err });
+      }
+    }
+    return;
+  }
+
+  // Handle show_more_details: post detailed answer as a threaded reply
+  if (actionId === "show_more_details" && result.detailedReply) {
+    try {
+      await (client as SlackClient).chat.postMessage({
+        channel: result.detailedReply.channelId,
+        thread_ts: result.detailedReply.threadTs,
+        text: result.detailedReply.text,
+      });
+
+      // Update original message to remove the "More details" button
+      if (channelId && messageTs && originalBlocks) {
+        const updatedBlocks = originalBlocks.map((block) => {
+          if (block.type === "actions" && Array.isArray(block.elements)) {
+            // Remove the show_more_details button, keep others
+            const filteredElements = (block.elements as Array<{ action_id?: string }>).filter(
+              (el) => el.action_id !== "show_more_details"
+            );
+            if (filteredElements.length === 0) {
+              return null; // Remove the entire actions block if empty
+            }
+            return { ...block, elements: filteredElements };
+          }
+          return block;
+        }).filter((block): block is NonNullable<typeof block> => block !== null);
+
+        await (client as { chat: { update: (opts: unknown) => Promise<unknown> } }).chat.update({
+          channel: channelId,
+          ts: messageTs,
+          blocks: updatedBlocks,
+        });
+      }
+
+      logger.info("Posted detailed answer as reply", {
+        stage: "slack",
+        requestId: value,
+        channelId: result.detailedReply.channelId,
+      });
+    } catch (err) {
+      logger.error("Failed to post detailed answer", {
+        stage: "slack",
+        error: err,
+      });
+    }
     return;
   }
 
@@ -276,8 +467,47 @@ slackApp.action(/^(feedback_helpful|feedback_not_helpful|show_technical|hide_tec
 
 const app = receiver.app as express.Application;
 
+// Cookie parser for session management
+app.use(cookieParser());
+
 // Health check
 app.get("/healthz", (_req, res) => res.status(200).send("ok"));
+
+// ============================================
+// Auth & Dashboard Routes
+// ============================================
+
+if (config.googleOAuth.isConfigured) {
+  // Auth routes
+  const authRouter = createAuthRouter();
+  app.use("/auth", authRouter);
+
+  // OAuth handlers (separate from static login page)
+  app.get("/auth/login", handleLogin);
+  app.get("/auth/callback", handleCallback);
+  app.post("/auth/logout", handleLogout);
+
+  // Dashboard routes
+  app.use("/dashboard", express.json(), createDashboardRouter());
+
+  logger.info("Dashboard routes enabled", {
+    stage: "startup",
+  });
+} else {
+  // Dashboard not configured - return helpful message
+  app.get("/dashboard", (_req, res) => {
+    res.status(503).json({
+      error: "DASHBOARD_NOT_CONFIGURED",
+      message: "The dashboard is not configured. Please set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REDIRECT_URI, and SESSION_SECRET environment variables.",
+    });
+  });
+  app.get("/auth/login", (_req, res) => {
+    res.status(503).json({
+      error: "AUTH_NOT_CONFIGURED",
+      message: "Google OAuth is not configured.",
+    });
+  });
+}
 
 // Debug endpoint - version info
 app.get("/debug/version", (_req, res) => {
@@ -378,6 +608,57 @@ app.post(
   }),
   handleGitHubWebhook
 );
+
+// ============================================
+// Public API Routes
+// ============================================
+
+// Apply CORS to API routes
+app.use("/api", corsMiddleware);
+
+// Apply request ID to all API routes
+app.use("/api", addRequestId);
+
+// API health check (no auth required)
+app.get("/api/v1/health", handleHealthCheck);
+
+// Protected API routes (require authentication)
+if (config.api.isConfigured) {
+  // Rate limiting configuration
+  const rateLimiter = rateLimit({
+    windowMs: config.api.rateLimitWindowMs,
+    maxRequests: config.api.rateLimitMaxRequests,
+  });
+
+  // POST /api/v1/ask - Main Q&A endpoint
+  app.post(
+    "/api/v1/ask",
+    express.json({ limit: "100kb" }), // Limit request body size
+    authenticateApiKey,
+    rateLimiter,
+    validateBody(askRequestSchema),
+    handleAskRequest
+  );
+
+  logger.info("API routes enabled", {
+    stage: "startup",
+    keyCount: config.api.keys.length,
+    rateLimitWindow: config.api.rateLimitWindowMs,
+    rateLimitMax: config.api.rateLimitMaxRequests,
+  });
+} else {
+  // API not configured - return helpful error
+  app.post("/api/v1/ask", express.json(), (_req, res) => {
+    res.status(503).json({
+      error: "API_NOT_CONFIGURED",
+      message: "The API is not configured. Please set API_KEYS environment variable.",
+    });
+  });
+
+  logger.info("API routes disabled (no API keys configured)", {
+    stage: "startup",
+  });
+}
 
 // ============================================
 // Startup

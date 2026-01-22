@@ -25,7 +25,13 @@ export type Stage =
   | "attachments"
   | "indexer"
   // V3 stages
-  | "guardrails";
+  | "guardrails"
+  // API stages
+  | "api"
+  // Dashboard stages
+  | "auth"
+  | "dashboard"
+  | "db";
 
 interface LogContext {
   requestId?: string;

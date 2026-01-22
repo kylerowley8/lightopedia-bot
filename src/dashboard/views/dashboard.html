@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>API Keys - Lightopedia</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; }
+  </style>
+</head>
+<body class="min-h-dvh bg-neutral-50">
+  <!-- Header -->
+  <header class="bg-white border-b border-neutral-200">
+    <div class="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="size-8 bg-neutral-900 rounded-md flex items-center justify-center">
+          <svg class="size-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+          </svg>
+        </div>
+        <span class="font-semibold text-neutral-900">Lightopedia API</span>
+      </div>
+      <div class="flex items-center gap-4">
+        <div id="user-info" class="flex items-center gap-2 text-sm text-neutral-600">
+          <img id="user-avatar" class="size-6 rounded-full hidden" alt="" />
+          <span id="user-email"></span>
+        </div>
+        <form action="/auth/logout" method="POST" class="m-0">
+          <button type="submit" class="text-sm text-neutral-500 hover:text-neutral-700">
+            Sign out
+          </button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main content -->
+  <main class="max-w-4xl mx-auto px-4 py-8">
+    <div class="flex items-center justify-between mb-6">
+      <div>
+        <h1 class="text-2xl font-semibold text-neutral-900 text-balance">API Keys</h1>
+        <p class="text-sm text-neutral-500 mt-1 text-pretty">Create and manage API keys for the Lightopedia API</p>
+      </div>
+      <button
+        id="create-key-btn"
+        class="px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-md hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2"
+      >
+        Create key
+      </button>
+    </div>
+
+    <!-- Error banner -->
+    <div id="error-banner" class="hidden mb-4 p-3 bg-red-50 border border-red-200 rounded-md text-sm text-red-700"></div>
+
+    <!-- Keys list -->
+    <div id="keys-container" class="bg-white rounded-lg border border-neutral-200 shadow-sm">
+      <div id="keys-loading" class="p-8 text-center text-neutral-500">
+        Loading keys...
+      </div>
+      <div id="keys-empty" class="hidden p-8 text-center">
+        <div class="size-12 bg-neutral-100 rounded-full flex items-center justify-center mx-auto mb-3">
+          <svg class="size-6 text-neutral-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
+          </svg>
+        </div>
+        <p class="text-neutral-600 font-medium text-pretty">No API keys yet</p>
+        <p class="text-sm text-neutral-500 mt-1 text-pretty">Create your first API key to get started</p>
+        <button
+          id="create-key-btn-empty"
+          class="mt-4 px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-md hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2"
+        >
+          Create key
+        </button>
+      </div>
+      <table id="keys-table" class="hidden w-full">
+        <thead>
+          <tr class="border-b border-neutral-200 text-left text-sm text-neutral-500">
+            <th class="px-4 py-3 font-medium">Name</th>
+            <th class="px-4 py-3 font-medium">Key</th>
+            <th class="px-4 py-3 font-medium">Created</th>
+            <th class="px-4 py-3 font-medium">Last used</th>
+            <th class="px-4 py-3 font-medium"></th>
+          </tr>
+        </thead>
+        <tbody id="keys-tbody"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <!-- Create key modal -->
+  <div id="create-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+    <div class="bg-white rounded-lg shadow-lg w-full max-w-md">
+      <div class="p-6">
+        <h2 class="text-lg font-semibold text-neutral-900 text-balance">Create API key</h2>
+        <p class="text-sm text-neutral-500 mt-1 text-pretty">Give your key a name to help you identify it later.</p>
+        <form id="create-form" class="mt-4">
+          <label for="key-name" class="block text-sm font-medium text-neutral-700">Name</label>
+          <input
+            type="text"
+            id="key-name"
+            name="name"
+            required
+            maxlength="50"
+            placeholder="e.g., Production server"
+            class="mt-1 w-full px-3 py-2 border border-neutral-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:border-transparent"
+          />
+          <div id="create-error" class="hidden mt-2 text-sm text-red-600"></div>
+        </form>
+      </div>
+      <div class="px-6 py-4 bg-neutral-50 rounded-b-lg flex justify-end gap-3">
+        <button
+          type="button"
+          id="cancel-create"
+          class="px-4 py-2 text-sm font-medium text-neutral-700 hover:text-neutral-900"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          form="create-form"
+          id="submit-create"
+          class="px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-md hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          Create
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Key created modal -->
+  <div id="key-created-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+    <div class="bg-white rounded-lg shadow-lg w-full max-w-md">
+      <div class="p-6">
+        <div class="size-10 bg-green-100 rounded-full flex items-center justify-center mb-4">
+          <svg class="size-5 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" />
+          </svg>
+        </div>
+        <h2 class="text-lg font-semibold text-neutral-900 text-balance">API key created</h2>
+        <p class="text-sm text-neutral-500 mt-1 text-pretty">Copy your key now. You won't be able to see it again.</p>
+        <div class="mt-4">
+          <label class="block text-sm font-medium text-neutral-700">Your API key</label>
+          <div class="mt-1 flex">
+            <input
+              type="text"
+              id="new-key-value"
+              readonly
+              class="flex-1 px-3 py-2 bg-neutral-50 border border-neutral-300 rounded-l-md text-sm font-mono tabular-nums"
+            />
+            <button
+              type="button"
+              id="copy-key-btn"
+              class="px-3 py-2 bg-neutral-100 border border-l-0 border-neutral-300 rounded-r-md text-sm font-medium text-neutral-700 hover:bg-neutral-200"
+            >
+              Copy
+            </button>
+          </div>
+          <p id="copy-success" class="hidden mt-2 text-sm text-green-600">Copied to clipboard</p>
+        </div>
+      </div>
+      <div class="px-6 py-4 bg-neutral-50 rounded-b-lg flex justify-end">
+        <button
+          type="button"
+          id="close-key-created"
+          class="px-4 py-2 bg-neutral-900 text-white text-sm font-medium rounded-md hover:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-neutral-900 focus:ring-offset-2"
+        >
+          Done
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Revoke confirmation modal (AlertDialog for destructive action) -->
+  <div id="revoke-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+    <div class="bg-white rounded-lg shadow-lg w-full max-w-md" role="alertdialog" aria-modal="true" aria-labelledby="revoke-title" aria-describedby="revoke-desc">
+      <div class="p-6">
+        <div class="size-10 bg-red-100 rounded-full flex items-center justify-center mb-4">
+          <svg class="size-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+        </div>
+        <h2 id="revoke-title" class="text-lg font-semibold text-neutral-900 text-balance">Revoke API key</h2>
+        <p id="revoke-desc" class="text-sm text-neutral-500 mt-1 text-pretty">
+          Are you sure you want to revoke <span id="revoke-key-name" class="font-medium text-neutral-700"></span>?
+          Any applications using this key will no longer be able to authenticate.
+        </p>
+      </div>
+      <div class="px-6 py-4 bg-neutral-50 rounded-b-lg flex justify-end gap-3">
+        <button
+          type="button"
+          id="cancel-revoke"
+          class="px-4 py-2 text-sm font-medium text-neutral-700 hover:text-neutral-900"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          id="confirm-revoke"
+          class="px-4 py-2 bg-red-600 text-white text-sm font-medium rounded-md hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-600 focus:ring-offset-2"
+        >
+          Revoke key
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let keys = [];
+    let revokeKeyId = null;
+    let revokeKeyName = null;
+
+    // DOM elements
+    const keysLoading = document.getElementById('keys-loading');
+    const keysEmpty = document.getElementById('keys-empty');
+    const keysTable = document.getElementById('keys-table');
+    const keysTbody = document.getElementById('keys-tbody');
+    const errorBanner = document.getElementById('error-banner');
+    const createModal = document.getElementById('create-modal');
+    const createForm = document.getElementById('create-form');
+    const createError = document.getElementById('create-error');
+    const keyCreatedModal = document.getElementById('key-created-modal');
+    const newKeyValue = document.getElementById('new-key-value');
+    const copySuccess = document.getElementById('copy-success');
+    const revokeModal = document.getElementById('revoke-modal');
+    const revokeKeyNameEl = document.getElementById('revoke-key-name');
+
+    // Format date
+    function formatDate(dateStr) {
+      if (!dateStr) return 'Never';
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+      });
+    }
+
+    // Render keys table
+    function renderKeys() {
+      keysLoading.classList.add('hidden');
+
+      const activeKeys = keys.filter(k => !k.isRevoked);
+
+      if (activeKeys.length === 0) {
+        keysEmpty.classList.remove('hidden');
+        keysTable.classList.add('hidden');
+        return;
+      }
+
+      keysEmpty.classList.add('hidden');
+      keysTable.classList.remove('hidden');
+
+      keysTbody.innerHTML = activeKeys.map(key => `
+        <tr class="border-b border-neutral-100 last:border-0">
+          <td class="px-4 py-3 text-sm text-neutral-900">${escapeHtml(key.name)}</td>
+          <td class="px-4 py-3 text-sm font-mono text-neutral-500 tabular-nums">${escapeHtml(key.keyPrefix)}</td>
+          <td class="px-4 py-3 text-sm text-neutral-500 tabular-nums">${formatDate(key.createdAt)}</td>
+          <td class="px-4 py-3 text-sm text-neutral-500 tabular-nums">${formatDate(key.lastUsedAt)}</td>
+          <td class="px-4 py-3 text-right">
+            <button
+              onclick="showRevokeModal('${key.id}', '${escapeHtml(key.name)}')"
+              class="text-sm text-red-600 hover:text-red-700"
+            >
+              Revoke
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    // Escape HTML
+    function escapeHtml(str) {
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
+    }
+
+    // Show error
+    function showError(message) {
+      errorBanner.textContent = message;
+      errorBanner.classList.remove('hidden');
+    }
+
+    // Hide error
+    function hideError() {
+      errorBanner.classList.add('hidden');
+    }
+
+    // Fetch keys
+    async function fetchKeys() {
+      try {
+        const res = await fetch('/dashboard/api/keys');
+        if (!res.ok) {
+          if (res.status === 401) {
+            window.location.href = '/auth/login';
+            return;
+          }
+          throw new Error('Failed to fetch keys');
+        }
+        const data = await res.json();
+        keys = data.keys;
+        renderKeys();
+      } catch (err) {
+        keysLoading.classList.add('hidden');
+        showError('Failed to load API keys. Please refresh the page.');
+      }
+    }
+
+    // Fetch user info
+    async function fetchUser() {
+      try {
+        const res = await fetch('/dashboard/api/me');
+        if (!res.ok) return;
+        const data = await res.json();
+        document.getElementById('user-email').textContent = data.email;
+        if (data.pictureUrl) {
+          const avatar = document.getElementById('user-avatar');
+          avatar.src = data.pictureUrl;
+          avatar.classList.remove('hidden');
+        }
+      } catch (err) {
+        // Ignore - user info is optional
+      }
+    }
+
+    // Open create modal
+    function openCreateModal() {
+      createForm.reset();
+      createError.classList.add('hidden');
+      createModal.classList.remove('hidden');
+      document.getElementById('key-name').focus();
+    }
+
+    // Close create modal
+    function closeCreateModal() {
+      createModal.classList.add('hidden');
+    }
+
+    // Handle create form submit
+    async function handleCreate(e) {
+      e.preventDefault();
+      const name = document.getElementById('key-name').value.trim();
+
+      if (!name) {
+        createError.textContent = 'Name is required';
+        createError.classList.remove('hidden');
+        return;
+      }
+
+      const submitBtn = document.getElementById('submit-create');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Creating...';
+
+      try {
+        const res = await fetch('/dashboard/api/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name }),
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.message || 'Failed to create key');
+        }
+
+        const data = await res.json();
+        keys.unshift(data.key);
+        renderKeys();
+
+        closeCreateModal();
+
+        // Show the key created modal
+        newKeyValue.value = data.rawKey;
+        copySuccess.classList.add('hidden');
+        keyCreatedModal.classList.remove('hidden');
+      } catch (err) {
+        createError.textContent = err.message;
+        createError.classList.remove('hidden');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Create';
+      }
+    }
+
+    // Copy key to clipboard
+    async function copyKey() {
+      try {
+        await navigator.clipboard.writeText(newKeyValue.value);
+        copySuccess.classList.remove('hidden');
+      } catch (err) {
+        // Fallback for older browsers
+        newKeyValue.select();
+        document.execCommand('copy');
+        copySuccess.classList.remove('hidden');
+      }
+    }
+
+    // Close key created modal
+    function closeKeyCreatedModal() {
+      keyCreatedModal.classList.add('hidden');
+    }
+
+    // Show revoke modal
+    function showRevokeModal(id, name) {
+      revokeKeyId = id;
+      revokeKeyName = name;
+      revokeKeyNameEl.textContent = name;
+      revokeModal.classList.remove('hidden');
+    }
+
+    // Close revoke modal
+    function closeRevokeModal() {
+      revokeKeyId = null;
+      revokeKeyName = null;
+      revokeModal.classList.add('hidden');
+    }
+
+    // Confirm revoke
+    async function confirmRevoke() {
+      if (!revokeKeyId) return;
+
+      const confirmBtn = document.getElementById('confirm-revoke');
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Revoking...';
+
+      try {
+        const res = await fetch(`/dashboard/api/keys/${revokeKeyId}`, {
+          method: 'DELETE',
+        });
+
+        if (!res.ok) {
+          const data = await res.json();
+          throw new Error(data.message || 'Failed to revoke key');
+        }
+
+        // Update local state
+        const keyIndex = keys.findIndex(k => k.id === revokeKeyId);
+        if (keyIndex !== -1) {
+          keys[keyIndex].isRevoked = true;
+        }
+        renderKeys();
+        closeRevokeModal();
+      } catch (err) {
+        showError(err.message);
+        closeRevokeModal();
+      } finally {
+        confirmBtn.disabled = false;
+        confirmBtn.textContent = 'Revoke key';
+      }
+    }
+
+    // Event listeners
+    document.getElementById('create-key-btn').addEventListener('click', openCreateModal);
+    document.getElementById('create-key-btn-empty').addEventListener('click', openCreateModal);
+    document.getElementById('cancel-create').addEventListener('click', closeCreateModal);
+    createForm.addEventListener('submit', handleCreate);
+    document.getElementById('copy-key-btn').addEventListener('click', copyKey);
+    document.getElementById('close-key-created').addEventListener('click', closeKeyCreatedModal);
+    document.getElementById('cancel-revoke').addEventListener('click', closeRevokeModal);
+    document.getElementById('confirm-revoke').addEventListener('click', confirmRevoke);
+
+    // Close modals on escape key
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        closeCreateModal();
+        closeKeyCreatedModal();
+        closeRevokeModal();
+      }
+    });
+
+    // Close modals on backdrop click
+    createModal.addEventListener('click', (e) => {
+      if (e.target === createModal) closeCreateModal();
+    });
+    keyCreatedModal.addEventListener('click', (e) => {
+      if (e.target === keyCreatedModal) closeKeyCreatedModal();
+    });
+    revokeModal.addEventListener('click', (e) => {
+      if (e.target === revokeModal) closeRevokeModal();
+    });
+
+    // Initialize
+    fetchUser();
+    fetchKeys();
+  </script>
+</body>
+</html>
