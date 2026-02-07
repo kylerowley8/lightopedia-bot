@@ -10,7 +10,12 @@ export type ErrorCode =
   | "INDEXING_FAILED"
   | "CONFIG_ERROR"
   | "VALIDATION_ERROR"
-  | "UNKNOWN_ERROR";
+  | "UNKNOWN_ERROR"
+  // API-specific error codes
+  | "API_UNAUTHORIZED"
+  | "API_RATE_LIMIT_EXCEEDED"
+  | "API_VALIDATION_ERROR"
+  | "API_INTERNAL_ERROR";
 
 export interface AppError {
   code: ErrorCode;
@@ -98,7 +103,30 @@ export function getUserMessage(error: AppError): string {
       return "I found some information but couldn't generate an answer. Please try again.";
     case "SLACK_API_ERROR":
       return "There was an issue with Slack. Please try again.";
+    case "API_UNAUTHORIZED":
+      return "Invalid or missing API key.";
+    case "API_RATE_LIMIT_EXCEEDED":
+      return "Too many requests. Please try again later.";
+    case "API_VALIDATION_ERROR":
+      return "Invalid request parameters.";
+    case "API_INTERNAL_ERROR":
+      return "An internal error occurred. Please try again.";
     default:
       return "Something went wrong. Please try again.";
   }
+}
+
+/** Create an API error */
+export function apiError(
+  code: "API_UNAUTHORIZED" | "API_RATE_LIMIT_EXCEEDED" | "API_VALIDATION_ERROR" | "API_INTERNAL_ERROR",
+  message: string,
+  requestId?: string,
+  cause?: unknown
+): LightopediaError {
+  return new LightopediaError({
+    code,
+    message,
+    requestId,
+    cause,
+  });
 }

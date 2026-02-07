@@ -3,11 +3,10 @@
 // ============================================
 
 import type { GroundedAnswer, EvidencePack } from "../evidence/types.js";
-import type { RouteDecision } from "../router/types.js";
+import type { EscalationDraft } from "../agent/tools.js";
 
 /**
  * Raw input from Slack.
- * Preprocessed into RouterInput before routing.
  */
 export type SlackInput = {
   /** User's message text (mention stripped) */
@@ -111,12 +110,26 @@ export type ThreadHistoryMessage = {
 };
 
 /**
+ * Minimal route info for backward compatibility.
+ * The agentic loop doesn't use a router, but downstream
+ * code (renderer, feedback) still references the route shape.
+ */
+export type RouteInfo = {
+  /** Mode label (for logging/analytics) */
+  mode: string;
+  /** Confidence level */
+  confidence: "high" | "medium" | "low";
+  /** Query hints (empty for agentic) */
+  queryHints: string[];
+};
+
+/**
  * Complete pipeline result.
  * Passed to renderer.
  */
 export type PipelineResult = {
-  /** Routing decision */
-  route: RouteDecision;
+  /** Route info (minimal for agentic pipeline) */
+  route: RouteInfo;
 
   /** Retrieved evidence */
   evidence: EvidencePack;
@@ -130,27 +143,7 @@ export type PipelineResult = {
     latencyMs: number;
     mode: string;
   };
+
+  /** Escalation draft if the LLM triggered escalate_to_human */
+  escalation?: EscalationDraft;
 };
-
-/**
- * Action payload for button clicks.
- */
-export type ActionPayload = {
-  /** Action type */
-  action: "show_technical" | "trace_api" | "trace_domain" | "feedback_helpful" | "feedback_not_helpful";
-
-  /** Original request ID */
-  requestId: string;
-
-  /** Additional action-specific data */
-  data?: Record<string, string>;
-};
-
-// ============================================
-// Render mode
-// ============================================
-
-/**
- * Rendering mode for Slack output.
- */
-export type RenderMode = "non_technical" | "technical";

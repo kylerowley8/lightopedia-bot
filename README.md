@@ -1,50 +1,25 @@
 # Lightopedia
 
-Internal Q&A bot for the Light platform. Answers sales, CS, and RevOps questions using a docs-first, code-grounded approach.
+Internal Q&A bot for the Light platform. Answers sales, CS, and RevOps questions using help articles as the single source of truth.
 
 ## What It Does
 
-Lightopedia helps teams get accurate, defensible answers about Light by:
+Lightopedia answers questions about Light by:
 
-1. **Routing** - Classifies questions into modes (capability, enablement, how-to, etc.)
-2. **Retrieving** - Searches indexed code, docs, and curated Slack threads
-3. **Synthesizing** - Uses LLM to explain evidence in customer-ready language
-4. **Grounding** - Ensures every claim is cited (binary citation gate)
-5. **Rendering** - Formats for Slack with "Show technical details" option
+1. **Routing** — Classifies questions into modes (capability, enablement, how-to, etc.)
+2. **Retrieving** — Searches indexed help articles via vector + keyword search
+3. **Synthesizing** — Uses LLM to explain evidence in customer-ready language
+4. **Grounding** — Ensures every functional claim is backed by article evidence
+5. **Rendering** — Formats for Slack with feedback buttons
 
-## Source Hierarchy (V3)
+## Knowledge Source
 
-```
-1. CODE (Kotlin, TypeScript)     → Ground Truth for implementation
-2. DOCS (Markdown)               → Customer commitments & guarantees
-3. SLACK (Curated threads)       → Internal guidance & edge cases
-```
-
-**Rule:** Code wins for "how does X work?" questions. Docs win for "can Light do X?" questions.
-
-## Version History
-
-### V3 (Current)
-- **Code indexing** - Kotlin (.kt, .kts) and TypeScript (.ts, .tsx) files indexed
-- **Function/class chunking** - Code split by semantic boundaries, not character count
-- **Symbol extraction** - Class names, function names tracked for better retrieval
-- **Forbidden phrases** - Auto-replacement of over-promising language ("seamlessly" → "is designed to")
-- **Sales-safe guardrails** - Responses are non-promissory and defensible
-
-### V2
-- **Slack KB** - Curated #lightopedia threads indexed
-- **Linear fallback** - Graceful handling when docs don't have answers
-- **Router-based architecture** - Clean separation of routing, retrieval, synthesis
-
-### V1
-- **Docs-only** - Markdown documentation indexed
-- **Binary citation gate** - Every claim must be grounded
-- **Non-technical by default** - Customer-ready language
+Help articles from `light-space/help-articles` are the single source of truth. If the articles don't cover a topic, Lightopedia says so honestly.
 
 ## Architecture
 
 ```
-User Question (Slack)
+User Question (Slack / API)
        ↓
 ┌──────────────────┐
 │  Router          │  ← Policy selector (never answers)
@@ -53,28 +28,26 @@ User Question (Slack)
 └────────┬─────────┘
          ↓
 ┌──────────────────┐
-│  Retrieval       │  ← Code > Docs > Slack
-│  - Code chunks   │
-│  - Doc chunks    │
-│  - Slack threads │
+│  Retrieval       │  ← Help articles only
+│  - Vector search │
+│  - Keyword search│
+│  - Reranking     │
 └────────┬─────────┘
          ↓
 ┌──────────────────┐
 │  Synthesis       │  ← LLM explains evidence
 │  - GPT-4o        │
-│  - V3 guardrails │
+│  - Guardrails    │
 └────────┬─────────┘
          ↓
 ┌──────────────────┐
-│  Citation Gate   │  ← Binary: cited or rejected
-│  - No heuristics │
-│  - Drop uncited  │
+│  Citation Gate   │  ← Functional claims need evidence
 └────────┬─────────┘
          ↓
 ┌──────────────────┐
-│  Slack Render    │  ← Non-technical by default
+│  Slack Render    │  ← Non-technical, customer-ready
 │  - Summary       │
-│  - Actions       │
+│  - Feedback      │
 └──────────────────┘
 ```
 
@@ -87,25 +60,6 @@ User Question (Slack)
 | `onboarding_howto` | Configuration guides | "How do I set up X?" |
 | `followup` | Thread continuation | "What about Y?" |
 | `clarify` | Need more context | (ambiguous questions) |
-| `out_of_scope` | Customer-specific data | "Why did invoice X fail?" |
-
-## V3 Output Format
-
-Responses follow a structured format:
-
-```json
-{
-  "shortAnswer": "Direct answer with appropriate framing",
-  "conceptualModel": "How Light models/thinks about this",
-  "howItWorks": ["Step 1", "Step 2", "Step 3"],
-  "boundaries": {
-    "whatLightDoes": ["capability 1", "capability 2"],
-    "whatLightDoesNot": ["external system X", "manual step Y"]
-  },
-  "salesSummary": "Reusable line for customer conversations",
-  "citations": ["1", "2"]
-}
-```
 
 ## Allowed vs Forbidden Language
 
@@ -135,80 +89,57 @@ src/
     heuristics.ts            # Deterministic classification
     types.ts                 # Mode definitions
   retrieval/
-    docsRetrieval.ts         # Code > Docs > Slack search
+    search.ts                # Vector + keyword search
+    keywordSearch.ts          # Keyword search
+    rerank.ts                # LLM reranking
     embeddings.ts            # OpenAI embeddings
   evidence/
-    types.ts                 # Evidence contracts (CodeChunk, DocChunk, etc.)
-    buildEvidencePack.ts     # Evidence assembly with hierarchy
+    types.ts                 # Evidence contracts (Article, EvidencePack, etc.)
+    buildEvidencePack.ts     # Evidence assembly
   grounding/
-    citationGate.ts          # Binary citation enforcement
-    forbiddenPhrases.ts      # V3 guardrails
+    citationGate.ts          # Citation enforcement
+    forbiddenPhrases.ts      # Language guardrails
   indexer/
-    index.ts                 # Routing between code/doc indexers
-    codeIndexer.ts           # Kotlin/TypeScript indexing
-    config.ts                # File patterns and config
+    index.ts                 # Doc indexing entrypoint
+    docsIndexer.ts           # Help article indexing
+    chunker.ts               # Document chunking
+    config.ts                # Allowed repos, file patterns
   llm/
     client.ts                # OpenAI wrapper
-    prompts.ts               # All prompts with V3 hierarchy
+    prompts.ts               # System prompts
     synthesize.ts            # Answer generation
+    routerLLM.ts             # LLM-based routing
   slack/
-    renderNonTechnical.ts    # Default output
-    renderTechnical.ts       # Detailed output
+    renderNonTechnical.ts    # Slack output formatting
     actions.ts               # Button handlers
-  scripts/
-    reindexRepo.ts           # Re-index a GitHub repo
-    checkDocsTable.ts        # Database inspection
+  github/
+    webhook.ts               # Auto-reindex on push
+  server.ts                  # Express + Slack Bolt server
 ```
 
 ## Database Schema
 
 ### `docs` table
-Stores all indexed content (code, docs, Slack):
+Stores indexed help article chunks:
 
 | Field | Description |
 |-------|-------------|
 | `id` | UUID |
 | `content` | Chunk text |
 | `embedding` | Vector (1536 dimensions) |
-| `metadata` | JSON with source_type, repo_slug, path, symbols, etc. |
-
-### `slack_threads` table
-Curated Slack thread summaries:
-
-| Field | Description |
-|-------|-------------|
-| `id` | UUID |
-| `topic` | Thread topic |
-| `content` | Summarized content |
-| `embedding` | Vector |
+| `metadata` | JSON with repo_slug, path, title, section, etc. |
 
 ## Indexing
 
-### Index a Repository
-
 ```bash
-# Index a single repo
-npx tsx src/scripts/reindexRepo.ts light-space/light
+# Index help articles
+npx tsx src/scripts/reindexRepo.ts light-space/help-articles main
 
-# Index multiple repos
-npx tsx src/scripts/reindexRepo.ts light-space/axolotl
-npx tsx src/scripts/reindexRepo.ts light-space/mobile-app
-```
-
-### Check Index Status
-
-```bash
+# Check index status
 npx tsx src/scripts/checkDocsTable.ts
 ```
 
-### Current Index Stats
-
-| Source | Chunks |
-|--------|--------|
-| Code (Kotlin/TS) | 22,965 |
-| Docs (Markdown) | 854 |
-| Slack threads | 100 |
-| **Total** | **23,919** |
+GitHub webhook auto-reindexes on push to `light-space/help-articles` main branch.
 
 ## Development
 
@@ -217,10 +148,13 @@ npx tsx src/scripts/checkDocsTable.ts
 npm install
 
 # Run server
-npx tsx src/server.v2.ts
+npm run dev
 
 # Type check
 npx tsc --noEmit
+
+# Run tests
+npm test
 
 # Build
 npm run build
@@ -240,7 +174,7 @@ SUPABASE_SERVICE_ROLE_KEY=...
 # OpenAI
 OPENAI_API_KEY=sk-...
 
-# GitHub App (for code indexing)
+# GitHub App (for webhook auto-reindex)
 GITHUB_APP_ID=...
 GITHUB_PRIVATE_KEY=...
 ```
@@ -252,7 +186,6 @@ GITHUB_PRIVATE_KEY=...
 | "Does Light support multi-currency invoicing?" | Clear capability question |
 | "How should I explain the ledger to a controller?" | Clear enablement question |
 | "How do I configure Salesforce sync?" | Clear how-to question |
-| "How does Light model deferred revenue?" | Clear implementation question (V3) |
 
 | Avoid | Why |
 |-------|-----|
@@ -263,12 +196,8 @@ GITHUB_PRIVATE_KEY=...
 
 ```
 ROUTER_VERSION = "router.v1.0"
-RETRIEVAL_VERSION = "retrieval.v1.0"
-PIPELINE_VERSION = "pipeline.v1.0"
+RETRIEVAL_VERSION = "retrieval.v2.0"
+PIPELINE_VERSION = "pipeline.v2.0"
 ```
 
 Each version is logged with every request for replay capability.
-
----
-
-*Lightopedia V3 - Code-grounded, sales-safe, non-promissory.*

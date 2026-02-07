@@ -1,267 +1,194 @@
 // ============================================
-// Indexer Config Tests — V1 Scope Enforcement
+// Indexer Config Tests — Help-Articles Only
 // ============================================
 
 import { describe, it, expect } from "vitest";
 import {
-  isAllowedRepo,
-  isAllowedSlackChannel,
-  shouldIndexPath,
-  validateIndexRequest,
   ALLOWED_REPOS,
-  ALLOWED_SLACK_CHANNELS,
+  isAllowedRepo,
+  shouldIndexPath,
+  isDocFile,
+  validateIndexRequest,
 } from "../src/indexer/config.js";
 
-describe("Allowed Repos", () => {
-  it("should allow light-space/light", () => {
-    expect(isAllowedRepo("light-space/light")).toBe(true);
-  });
+// ============================================
+// ALLOWED_REPOS
+// ============================================
 
-  it("should allow light-space/axolotl", () => {
-    expect(isAllowedRepo("light-space/axolotl")).toBe(true);
-  });
-
-  it("should allow light-space/mobile-app", () => {
-    expect(isAllowedRepo("light-space/mobile-app")).toBe(true);
-  });
-
-  it("should reject unknown repos", () => {
-    expect(isAllowedRepo("light-space/other")).toBe(false);
-    expect(isAllowedRepo("other-org/light")).toBe(false);
-    expect(isAllowedRepo("random/repo")).toBe(false);
-  });
-
-  it("should have exactly 3 allowed repos", () => {
-    expect(ALLOWED_REPOS).toHaveLength(3);
+describe("ALLOWED_REPOS", () => {
+  it("contains only 'light-space/help-articles'", () => {
+    expect(ALLOWED_REPOS).toHaveLength(1);
+    expect(ALLOWED_REPOS).toContain("light-space/help-articles");
   });
 });
 
-describe("Allowed Slack Channels", () => {
-  it("should allow #lightopedia channel", () => {
-    expect(isAllowedSlackChannel("C08SDBFS7BL")).toBe(true);
+// ============================================
+// isAllowedRepo()
+// ============================================
+
+describe("isAllowedRepo", () => {
+  it("returns true for 'light-space/help-articles'", () => {
+    expect(isAllowedRepo("light-space/help-articles")).toBe(true);
   });
 
-  it("should reject other channels", () => {
-    expect(isAllowedSlackChannel("C12345678")).toBe(false);
-    expect(isAllowedSlackChannel("CXXXXXXXX")).toBe(false);
-    expect(isAllowedSlackChannel("")).toBe(false);
+  it("returns false for 'light-space/other-repo'", () => {
+    expect(isAllowedRepo("light-space/other-repo")).toBe(false);
   });
 
-  it("should have exactly 1 allowed channel", () => {
-    expect(Object.keys(ALLOWED_SLACK_CHANNELS)).toHaveLength(1);
+  it("returns false for an empty string", () => {
+    expect(isAllowedRepo("")).toBe(false);
+  });
+
+  it("returns false for a completely unrelated repo", () => {
+    expect(isAllowedRepo("other-org/some-repo")).toBe(false);
   });
 });
 
-describe("File Path Indexing — Allowed Paths", () => {
-  describe("README files", () => {
-    it("should allow root README.md", () => {
+// ============================================
+// shouldIndexPath()
+// ============================================
+
+describe("shouldIndexPath", () => {
+  describe("allowed paths", () => {
+    it("returns true for 'README.md'", () => {
       expect(shouldIndexPath("README.md")).toBe(true);
     });
 
-    it("should allow nested README.md", () => {
-      expect(shouldIndexPath("docs/README.md")).toBe(true);
-      expect(shouldIndexPath("src/README.md")).toBe(true);
+    it("returns true for 'docs/guide.md'", () => {
+      expect(shouldIndexPath("docs/guide.md")).toBe(true);
+    });
+
+    it("returns true for 'docs/nested/file.mdx'", () => {
+      expect(shouldIndexPath("docs/nested/file.mdx")).toBe(true);
+    });
+
+    it("returns true for 'some/path.md'", () => {
+      expect(shouldIndexPath("some/path.md")).toBe(true);
     });
   });
 
-  describe("docs directory", () => {
-    it("should allow docs/*.md", () => {
-      expect(shouldIndexPath("docs/billing.md")).toBe(true);
-      expect(shouldIndexPath("docs/api.md")).toBe(true);
+  describe("excluded paths", () => {
+    it("returns false for 'dist/bundle.js'", () => {
+      expect(shouldIndexPath("dist/bundle.js")).toBe(false);
     });
 
-    it("should allow docs/**/*.md", () => {
-      expect(shouldIndexPath("docs/guides/getting-started.md")).toBe(true);
-      expect(shouldIndexPath("docs/api/endpoints/invoices.md")).toBe(true);
+    it("returns false for 'node_modules/pkg/index.js'", () => {
+      expect(shouldIndexPath("node_modules/pkg/index.js")).toBe(false);
     });
 
-    it("should allow docs/**/*.mdx", () => {
-      expect(shouldIndexPath("docs/components/Button.mdx")).toBe(true);
-    });
-  });
-
-  describe("Markdown files anywhere", () => {
-    it("should allow .md files matching patterns", () => {
-      // **/*.md matches any .md file
-      expect(shouldIndexPath("CONTRIBUTING.md")).toBe(true);
-      expect(shouldIndexPath("guides/setup.md")).toBe(true);
-      expect(shouldIndexPath("api/overview.md")).toBe(true);
-    });
-
-    it("should allow .mdx files", () => {
-      expect(shouldIndexPath("pages/index.mdx")).toBe(true);
-    });
-  });
-});
-
-describe("File Path Indexing — Excluded Paths", () => {
-  describe("Executable code", () => {
-    it("should reject Kotlin files", () => {
-      expect(shouldIndexPath("src/Invoice.kt")).toBe(false);
-      expect(shouldIndexPath("billing/Payment.kts")).toBe(false);
-    });
-
-    it("should reject Java files", () => {
-      expect(shouldIndexPath("src/Main.java")).toBe(false);
-    });
-
-    it("should reject TypeScript files", () => {
-      expect(shouldIndexPath("src/server.ts")).toBe(false);
-      expect(shouldIndexPath("components/Button.tsx")).toBe(false);
-    });
-
-    it("should reject JavaScript files", () => {
-      expect(shouldIndexPath("index.js")).toBe(false);
-      expect(shouldIndexPath("App.jsx")).toBe(false);
-    });
-
-    it("should reject other languages", () => {
-      expect(shouldIndexPath("main.py")).toBe(false);
-      expect(shouldIndexPath("main.go")).toBe(false);
-      expect(shouldIndexPath("main.rs")).toBe(false);
-      expect(shouldIndexPath("main.swift")).toBe(false);
-      expect(shouldIndexPath("main.scala")).toBe(false);
-    });
-  });
-
-  describe("Config files", () => {
-    it("should reject JSON", () => {
-      expect(shouldIndexPath("package.json")).toBe(false);
-      expect(shouldIndexPath("tsconfig.json")).toBe(false);
-    });
-
-    it("should reject YAML", () => {
-      expect(shouldIndexPath("config.yaml")).toBe(false);
-      expect(shouldIndexPath("config.yml")).toBe(false);
-    });
-
-    it("should reject other config", () => {
-      expect(shouldIndexPath("config.toml")).toBe(false);
-      expect(shouldIndexPath("pom.xml")).toBe(false);
-      expect(shouldIndexPath("build.gradle")).toBe(false);
-    });
-  });
-
-  describe("Build artifacts", () => {
-    it("should reject dist/", () => {
-      expect(shouldIndexPath("dist/index.js")).toBe(false);
-      expect(shouldIndexPath("dist/README.md")).toBe(false);
-    });
-
-    it("should reject build/", () => {
-      expect(shouldIndexPath("build/output.js")).toBe(false);
-    });
-
-    it("should reject node_modules/", () => {
-      expect(shouldIndexPath("node_modules/lodash/README.md")).toBe(false);
-    });
-
-    it("should reject target/", () => {
-      expect(shouldIndexPath("target/classes/Main.class")).toBe(false);
-    });
-  });
-
-  describe("Generated files", () => {
-    it("should reject minified files", () => {
-      expect(shouldIndexPath("bundle.min.js")).toBe(false);
-      expect(shouldIndexPath("styles.min.css")).toBe(false);
-    });
-
-    it("should reject lock files", () => {
-      expect(shouldIndexPath("package-lock.json")).toBe(false);
-      expect(shouldIndexPath("yarn.lock")).toBe(false);
-      expect(shouldIndexPath("pnpm-lock.yaml")).toBe(false);
-    });
-
-    it("should reject source maps", () => {
-      expect(shouldIndexPath("bundle.js.map")).toBe(false);
-    });
-  });
-
-  describe("Test files", () => {
-    it("should reject *.test.* files", () => {
-      expect(shouldIndexPath("Invoice.test.ts")).toBe(false);
-      expect(shouldIndexPath("Invoice.test.kt")).toBe(false);
-    });
-
-    it("should reject *.spec.* files", () => {
-      expect(shouldIndexPath("Invoice.spec.ts")).toBe(false);
-    });
-
-    it("should reject __tests__/", () => {
-      expect(shouldIndexPath("__tests__/Invoice.ts")).toBe(false);
-    });
-
-    it("should reject tests/", () => {
-      expect(shouldIndexPath("tests/unit/Invoice.ts")).toBe(false);
-    });
-  });
-
-  describe("IDE/config directories", () => {
-    it("should reject .git/", () => {
+    it("returns false for '.git/config'", () => {
       expect(shouldIndexPath(".git/config")).toBe(false);
     });
 
-    it("should reject .github/", () => {
-      expect(shouldIndexPath(".github/workflows/ci.yml")).toBe(false);
+    it("returns false for 'CHANGELOG.md'", () => {
+      expect(shouldIndexPath("CHANGELOG.md")).toBe(false);
     });
 
-    it("should reject .vscode/", () => {
-      expect(shouldIndexPath(".vscode/settings.json")).toBe(false);
+    it("returns false for 'src/index.ts' (not markdown)", () => {
+      expect(shouldIndexPath("src/index.ts")).toBe(false);
     });
   });
 
-  describe("Changelogs", () => {
-    it("should reject CHANGELOG.md", () => {
-      expect(shouldIndexPath("CHANGELOG.md")).toBe(false);
+  describe("edge cases", () => {
+    it("returns false for an empty string", () => {
+      expect(shouldIndexPath("")).toBe(false);
+    });
+
+    it("returns false for markdown inside node_modules", () => {
+      expect(shouldIndexPath("node_modules/pkg/README.md")).toBe(false);
+    });
+
+    it("returns false for markdown inside dist", () => {
+      expect(shouldIndexPath("dist/docs/guide.md")).toBe(false);
+    });
+
+    it("returns true for deeply nested markdown", () => {
+      expect(shouldIndexPath("docs/a/b/c/d/guide.md")).toBe(true);
     });
   });
 });
 
-describe("Full Validation", () => {
-  it("should allow valid repo + path", () => {
-    const result = validateIndexRequest("light-space/light", "docs/billing.md");
-    expect(result.allowed).toBe(true);
+// ============================================
+// isDocFile()
+// ============================================
+
+describe("isDocFile", () => {
+  it("returns true for a .md file", () => {
+    expect(isDocFile("guide.md")).toBe(true);
   });
 
-  it("should reject invalid repo", () => {
-    const result = validateIndexRequest("other/repo", "docs/billing.md");
+  it("returns true for a .mdx file", () => {
+    expect(isDocFile("component.mdx")).toBe(true);
+  });
+
+  it("returns true for .MD (case insensitive)", () => {
+    expect(isDocFile("README.MD")).toBe(true);
+  });
+
+  it("returns true for .MDX (case insensitive)", () => {
+    expect(isDocFile("page.MDX")).toBe(true);
+  });
+
+  it("returns false for a .ts file", () => {
+    expect(isDocFile("index.ts")).toBe(false);
+  });
+
+  it("returns false for a .js file", () => {
+    expect(isDocFile("bundle.js")).toBe(false);
+  });
+
+  it("returns false for a .json file", () => {
+    expect(isDocFile("package.json")).toBe(false);
+  });
+});
+
+// ============================================
+// validateIndexRequest()
+// ============================================
+
+describe("validateIndexRequest", () => {
+  it("returns allowed for a valid repo and valid path", () => {
+    const result = validateIndexRequest(
+      "light-space/help-articles",
+      "docs/billing.md"
+    );
+    expect(result.allowed).toBe(true);
+    expect(result.reason).toBeUndefined();
+  });
+
+  it("returns not allowed for wrong repo", () => {
+    const result = validateIndexRequest(
+      "light-space/other-repo",
+      "docs/billing.md"
+    );
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("Repo not in allowlist");
   });
 
-  it("should reject invalid path", () => {
-    const result = validateIndexRequest("light-space/light", "src/Invoice.kt");
+  it("returns not allowed for excluded path", () => {
+    const result = validateIndexRequest(
+      "light-space/help-articles",
+      "CHANGELOG.md"
+    );
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("Path not allowed");
   });
 
-  it("should reject both invalid", () => {
-    const result = validateIndexRequest("other/repo", "src/Invoice.kt");
+  it("checks repo before path (repo rejection takes priority)", () => {
+    const result = validateIndexRequest(
+      "light-space/other-repo",
+      "CHANGELOG.md"
+    );
     expect(result.allowed).toBe(false);
-    // Repo check comes first
     expect(result.reason).toContain("Repo not in allowlist");
   });
-});
 
-describe("Edge Cases", () => {
-  it("should handle empty path", () => {
-    expect(shouldIndexPath("")).toBe(false);
-  });
-
-  it("should be case-sensitive for extensions", () => {
-    // .MD should still match (glob is case-insensitive for this)
-    // Actually our implementation is case-sensitive, so .MD won't match
-    expect(shouldIndexPath("README.MD")).toBe(false);
-  });
-
-  it("should handle deeply nested docs", () => {
-    expect(shouldIndexPath("docs/a/b/c/d/e/f/guide.md")).toBe(true);
-  });
-
-  it("should reject docs inside excluded directories", () => {
-    // Even if it's .md, if it's in node_modules, reject
-    expect(shouldIndexPath("node_modules/pkg/README.md")).toBe(false);
-    expect(shouldIndexPath("dist/docs/guide.md")).toBe(false);
+  it("returns not allowed for a non-markdown path in valid repo", () => {
+    const result = validateIndexRequest(
+      "light-space/help-articles",
+      "src/index.ts"
+    );
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("Path not allowed");
   });
 });

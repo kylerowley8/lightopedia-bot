@@ -4,7 +4,6 @@
 
 import { Router } from "express";
 import path from "path";
-import { fileURLToPath } from "url";
 import { requireAuth } from "../auth/middleware.js";
 import {
   handleListKeys,
@@ -13,7 +12,8 @@ import {
   handleGetMe,
 } from "./routes.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Views are in src/dashboard/views (not dist)
+const viewsDir = path.join(process.cwd(), "src", "dashboard", "views");
 
 /**
  * Create dashboard router with all routes.
@@ -23,7 +23,7 @@ export function createDashboardRouter(): Router {
 
   // Serve dashboard HTML (requires auth)
   router.get("/", requireAuth, (_req, res) => {
-    res.sendFile(path.join(__dirname, "views", "dashboard.html"));
+    res.sendFile(path.join(viewsDir, "dashboard.html"));
   });
 
   // API routes (all require auth)
@@ -43,7 +43,7 @@ export function createAuthRouter(): Router {
 
   // Serve login page
   router.get("/login", (_req, res) => {
-    res.sendFile(path.join(__dirname, "views", "login.html"));
+    res.sendFile(path.join(viewsDir, "login.html"));
   });
 
   return router;

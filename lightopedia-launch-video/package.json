@@ -1,0 +1,23 @@
+{
+  "name": "lightopedia-launch-video",
+  "version": "1.0.0",
+  "description": "Launch video for Lightopedia Slack bot",
+  "scripts": {
+    "dev": "remotion studio",
+    "studio": "remotion studio",
+    "render": "remotion render LightopediaLaunch out/lightopedia-launch.mp4",
+    "render:gif": "remotion render LightopediaLaunch out/lightopedia-launch.gif",
+    "build": "remotion bundle"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.0",
+    "@remotion/transitions": "^4.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.0",
+    "typescript": "^5.0.0"
+  }
+}

@@ -5,7 +5,7 @@ import type { Request, Response } from "express";
 import { config } from "../config/env.js";
 import { logger } from "../lib/logger.js";
 import { indexDocument } from "../indexer/index.js";
-import { shouldIndexPath } from "../indexer/config.js";
+import { shouldIndexPath, isAllowedRepo } from "../indexer/config.js";
 
 function verifySignature(payload: string, signature: string | undefined): boolean {
   if (!signature || !config.github.webhookSecret) return false;
@@ -94,6 +94,11 @@ async function processRepoUpdate(repoFullName: string, commitSha: string, instal
 
   if (!owner || !repo) {
     throw new Error(`Invalid repo name: ${repoFullName}`);
+  }
+
+  if (!isAllowedRepo(repoFullName)) {
+    logger.warn("Ignoring push from non-allowed repo", { stage: "github", repo: repoFullName });
+    return;
   }
 
   const octokit = await getInstallationOctokit(installationId);

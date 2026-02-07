@@ -1,33 +1,22 @@
 // ============================================
-// Indexing Config — V3 Scope: Code + Docs + Slack
-// Code is ground truth, Docs are commitments, Slack is guidance
+// Indexing Config — Help Articles Only
+// Single source of truth: light-space/help-articles
 // ============================================
 
 // ============================================
-// Allowed Repos (V1)
+// Allowed Repos
 // ============================================
 
 export const ALLOWED_REPOS = [
-  "light-space/light",
-  "light-space/axolotl",
-  "light-space/mobile-app",
+  "light-space/help-articles",
 ] as const;
 
 export type AllowedRepo = (typeof ALLOWED_REPOS)[number];
 
 // ============================================
-// Allowed Slack Channels (V1)
+// File Patterns — Docs Only
 // ============================================
 
-export const ALLOWED_SLACK_CHANNELS = {
-  lightopedia: "C08SDBFS7BL",
-} as const;
-
-// ============================================
-// File Patterns — V3: Code + Docs
-// ============================================
-
-// Documentation patterns
 export const DOC_PATTERNS = [
   "README.md",
   "*.md",
@@ -39,16 +28,8 @@ export const DOC_PATTERNS = [
   "**/*.mdx",
 ];
 
-// Code patterns (Kotlin + TypeScript)
-export const CODE_PATTERNS = [
-  "**/*.kt",
-  "**/*.kts",
-  "**/*.ts",
-  "**/*.tsx",
-];
-
-// Combined allow patterns
-export const ALLOW_PATHS = [...DOC_PATTERNS, ...CODE_PATTERNS];
+// Only doc patterns allowed
+export const ALLOW_PATHS = [...DOC_PATTERNS];
 
 // Explicit exclusions
 export const EXCLUDE_PATTERNS = [
@@ -63,10 +44,6 @@ export const EXCLUDE_PATTERNS = [
   "**/coverage/**",
   "node_modules/**",
   "**/node_modules/**",
-  "target/**",
-  "**/target/**",
-  "out/**",
-  "**/out/**",
 
   // Generated
   "**/*.min.js",
@@ -76,15 +53,6 @@ export const EXCLUDE_PATTERNS = [
   "**/package-lock.json",
   "**/yarn.lock",
   "**/pnpm-lock.yaml",
-  "**/*.d.ts",
-  "**/*.generated.*",
-
-  // Tests (still exclude for now)
-  "**/*.test.*",
-  "**/*.spec.*",
-  "**/__tests__/**",
-  "**/test/**",
-  "**/tests/**",
 
   // IDE/config
   "**/.git/**",
@@ -117,15 +85,7 @@ export function isAllowedRepo(repoSlug: string): boolean {
 }
 
 /**
- * Check if a Slack channel is allowed for indexing.
- */
-export function isAllowedSlackChannel(channelId: string): boolean {
-  return Object.values(ALLOWED_SLACK_CHANNELS).includes(channelId as any);
-}
-
-/**
  * Check if a file path should be indexed.
- * V3 scope: docs + code.
  */
 export function shouldIndexPath(path: string): boolean {
   // Check exclusions first (deny takes priority)
@@ -144,13 +104,6 @@ export function shouldIndexPath(path: string): boolean {
 
   // Default deny
   return false;
-}
-
-/**
- * Check if a path is a code file (Kotlin or TypeScript).
- */
-export function isCodeFile(path: string): boolean {
-  return /\.(kt|kts|ts|tsx)$/i.test(path);
 }
 
 /**

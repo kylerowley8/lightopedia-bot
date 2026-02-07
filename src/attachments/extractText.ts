@@ -184,18 +184,34 @@ function extractIdentifiersFromAnalysis(analysis: string): string[] {
  */
 async function extractLogFile(file: SlackFile): Promise<AttachmentEvidence | null> {
   try {
-    // Fetch file content with Slack auth
-    const response = await fetch(file.url, {
-      headers: {
-        Authorization: `Bearer ${config.slack.botToken}`,
-      },
+    // Fetch file content with Slack auth - handle redirects manually
+    // Authorization header gets stripped on cross-origin redirects
+    let finalResponse: Response;
+    const authHeader = `Bearer ${config.slack.botToken}`;
+
+    // First request: check for redirect
+    const initialResponse = await fetch(file.url, {
+      headers: { Authorization: authHeader },
+      redirect: "manual",
     });
 
-    if (!response.ok) {
-      throw new Error(`Failed to fetch: ${response.status}`);
+    if (initialResponse.status >= 300 && initialResponse.status < 400) {
+      // Redirect - Slack's redirect URL has auth baked in
+      const redirectUrl = initialResponse.headers.get("location");
+      if (!redirectUrl) {
+        throw new Error("Redirect without Location header");
+      }
+      // Follow redirect WITHOUT auth header
+      finalResponse = await fetch(redirectUrl);
+    } else {
+      finalResponse = initialResponse;
     }
 
-    const text = await response.text();
+    if (!finalResponse.ok) {
+      throw new Error(`Failed to fetch: ${finalResponse.status}`);
+    }
+
+    const text = await finalResponse.text();
 
     // Extract identifiers from the log
     const identifiers = extractIdentifiers(text);

@@ -1,124 +1,37 @@
 import { CHUNK_SIZE, CHUNK_OVERLAP } from "./config.js";
 
-export type SourceType = "code" | "docs" | "notion" | "unknown";
-
 export interface Chunk {
   content: string;
   index: number;
   metadata: {
     source: string;
-    sourceType: SourceType;
+    sourceType: "article";
     heading?: string;
-    symbols?: string[];      // For code: class/function/object names
-    filePath?: string;       // Clean file path without repo prefix
+    title?: string;
+    filePath?: string;
   };
 }
 
 /**
- * Determine source type based on file path/source
+ * Source type is always "article" for help-articles.
  */
-export function getSourceType(source: string): SourceType {
-  // Notion sources
-  if (source.startsWith("notion-") || source.includes("/notion/")) {
-    return "notion";
-  }
-
-  // Code files
-  const codeExtensions = /\.(kt|kts|java|ts|tsx|js|jsx|py|go|rs|rb|swift|scala)$/i;
-  if (codeExtensions.test(source)) {
-    return "code";
-  }
-
-  // Documentation
-  const docExtensions = /\.(md|mdx|txt|rst|adoc)$/i;
-  if (docExtensions.test(source)) {
-    return "docs";
-  }
-
-  // Config files (treat as code)
-  const configExtensions = /\.(json|yaml|yml|toml|xml|gradle|properties)$/i;
-  if (configExtensions.test(source)) {
-    return "code";
-  }
-
-  return "unknown";
+export function getSourceType(_source: string): "article" {
+  return "article";
 }
 
 /**
- * Extract symbols from Kotlin code (class, object, interface, function names)
+ * Extract article title from markdown content.
+ * Looks for the first # heading.
  */
-export function extractKotlinSymbols(content: string): string[] {
-  const symbols: string[] = [];
-
-  // Match class/object/interface declarations
-  const classPattern = /(?:class|object|interface|enum\s+class)\s+(\w+)/g;
-  let match;
-  while ((match = classPattern.exec(content)) !== null) {
-    if (match[1]) symbols.push(match[1]);
-  }
-
-  // Match function declarations
-  const funPattern = /fun\s+(?:<[^>]+>\s+)?(\w+)\s*\(/g;
-  while ((match = funPattern.exec(content)) !== null) {
-    if (match[1]) symbols.push(match[1]);
-  }
-
-  // Match top-level val/var declarations
-  const valPattern = /^(?:val|var)\s+(\w+)\s*[=:]/gm;
-  while ((match = valPattern.exec(content)) !== null) {
-    if (match[1]) symbols.push(match[1]);
-  }
-
-  return [...new Set(symbols)]; // Deduplicate
+export function extractArticleTitle(content: string): string | undefined {
+  const match = content.match(/^#\s+(.+)$/m);
+  return match?.[1]?.trim();
 }
 
 /**
- * Extract symbols from TypeScript/JavaScript code
- */
-export function extractTsSymbols(content: string): string[] {
-  const symbols: string[] = [];
-
-  // Match class/interface declarations
-  const classPattern = /(?:class|interface|type|enum)\s+(\w+)/g;
-  let match;
-  while ((match = classPattern.exec(content)) !== null) {
-    if (match[1]) symbols.push(match[1]);
-  }
-
-  // Match function declarations
-  const funPattern = /(?:function|async\s+function)\s+(\w+)\s*\(/g;
-  while ((match = funPattern.exec(content)) !== null) {
-    if (match[1]) symbols.push(match[1]);
-  }
-
-  // Match exported const/let declarations
-  const constPattern = /export\s+(?:const|let|var)\s+(\w+)\s*[=:]/g;
-  while ((match = constPattern.exec(content)) !== null) {
-    if (match[1]) symbols.push(match[1]);
-  }
-
-  return [...new Set(symbols)];
-}
-
-/**
- * Extract symbols based on file type
- */
-export function extractSymbols(content: string, source: string): string[] {
-  if (/\.(kt|kts)$/i.test(source)) {
-    return extractKotlinSymbols(content);
-  }
-  if (/\.(ts|tsx|js|jsx)$/i.test(source)) {
-    return extractTsSymbols(content);
-  }
-  return [];
-}
-
-/**
- * Extract clean file path from source (remove repo prefix)
+ * Extract clean file path from source (remove repo prefix).
  */
 export function extractFilePath(source: string): string {
-  // source is like "light-space/light/path/to/file.kt"
-  // We want "path/to/file.kt"
   const parts = source.split("/");
   if (parts.length > 2) {
     return parts.slice(2).join("/");
@@ -128,11 +41,8 @@ export function extractFilePath(source: string): string {
 
 export function chunkDocument(content: string, source: string): Chunk[] {
   const chunks: Chunk[] = [];
-  const sourceType = getSourceType(source);
   const filePath = extractFilePath(source);
-
-  // Extract symbols from the full document for code files
-  const documentSymbols = sourceType === "code" ? extractSymbols(content, source) : [];
+  const title = extractArticleTitle(content);
 
   // Split by markdown headings first
   const sections = splitByHeadings(content);
@@ -142,19 +52,15 @@ export function chunkDocument(content: string, source: string): Chunk[] {
     const sectionChunks = chunkSection(section.content, CHUNK_SIZE, CHUNK_OVERLAP);
 
     for (const text of sectionChunks) {
-      // Extract symbols specific to this chunk for code files
-      const chunkSymbols = sourceType === "code" ? extractSymbols(text, source) : [];
-
       chunks.push({
         content: text.trim(),
         index: chunkIndex++,
         metadata: {
           source,
-          sourceType,
+          sourceType: "article",
           filePath,
           heading: section.heading,
-          // Include chunk-specific symbols, fall back to document symbols for context
-          symbols: chunkSymbols.length > 0 ? chunkSymbols : documentSymbols.slice(0, 5),
+          title,
         },
       });
     }
@@ -208,13 +114,11 @@ function chunkSection(text: string, maxSize: number, overlap: number): string[] 
   let current = "";
 
   for (const para of paragraphs) {
-    // If paragraph itself is too long, split it further
     const paraParts = splitLongText(para, maxSize);
 
     for (const part of paraParts) {
       if (current.length + part.length > maxSize && current.length > 0) {
         chunks.push(current);
-        // Start next chunk with overlap from end of current
         const overlapText = current.slice(-overlap);
         current = overlapText + "\n\n" + part;
       } else {
@@ -227,11 +131,10 @@ function chunkSection(text: string, maxSize: number, overlap: number): string[] 
     chunks.push(current);
   }
 
-  // Final safety check: split any chunks that are still too large
+  // Final safety check
   const safeChunks: string[] = [];
   for (const chunk of chunks) {
     if (chunk.length > maxSize * 1.5) {
-      // Allow some flexibility but catch very large chunks
       safeChunks.push(...splitLongText(chunk, maxSize));
     } else {
       safeChunks.push(chunk);
@@ -241,21 +144,15 @@ function chunkSection(text: string, maxSize: number, overlap: number): string[] 
   return safeChunks;
 }
 
-/**
- * Split text that's too long by sentence boundaries or hard character limits.
- */
 function splitLongText(text: string, maxSize: number): string[] {
   if (text.length <= maxSize) return [text];
 
   const parts: string[] = [];
-
-  // First try to split by sentences
   const sentences = text.split(/(?<=[.!?])\s+/);
   let current = "";
 
   for (const sentence of sentences) {
     if (sentence.length > maxSize) {
-      // Sentence is too long, push current and split sentence by newlines or hard limit
       if (current.trim()) {
         parts.push(current.trim());
         current = "";
@@ -278,9 +175,6 @@ function splitLongText(text: string, maxSize: number): string[] {
   return parts.length > 0 ? parts : [text.slice(0, maxSize)];
 }
 
-/**
- * Split by newlines first, then by hard character limit as last resort.
- */
 function splitByNewlinesOrHard(text: string, maxSize: number): string[] {
   const parts: string[] = [];
   const lines = text.split("\n");
@@ -288,12 +182,10 @@ function splitByNewlinesOrHard(text: string, maxSize: number): string[] {
 
   for (const line of lines) {
     if (line.length > maxSize) {
-      // Line is too long, hard split it
       if (current.trim()) {
         parts.push(current.trim());
         current = "";
       }
-      // Hard split by character limit
       for (let i = 0; i < line.length; i += maxSize) {
         parts.push(line.slice(i, i + maxSize));
       }

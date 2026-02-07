@@ -4,17 +4,15 @@
 
 import { logger } from "../lib/logger.js";
 import { supabase } from "../db/supabase.js";
+import { getCachedAnswer } from "../lib/answerCache.js";
 
 /**
  * Action types.
  */
 export type ActionType =
-  | "show_technical"
-  | "hide_technical"
+  | "show_more_details"
   | "feedback_helpful"
-  | "feedback_not_helpful"
-  | "trace_api"
-  | "trace_domain";
+  | "feedback_not_helpful";
 
 /**
  * Action handler result.
@@ -24,6 +22,12 @@ export type ActionResult = {
   updateMessage?: boolean;
   blocks?: unknown[];
   error?: string;
+  /** For show_more_details: the detailed answer to post as a reply */
+  detailedReply?: {
+    text: string;
+    threadTs: string;
+    channelId: string;
+  };
 };
 
 /**
@@ -48,11 +52,8 @@ export async function handleAction(
     case "feedback_not_helpful":
       return handleFeedback(value, "not_helpful", userId);
 
-    case "show_technical":
-      return handleShowTechnical(value, userId);
-
-    case "hide_technical":
-      return handleHideTechnical(value, userId);
+    case "show_more_details":
+      return handleShowMoreDetails(value, userId);
 
     default:
       logger.warn("Unknown action", { stage: "slack", actionId });
@@ -96,60 +97,39 @@ async function handleFeedback(
 }
 
 /**
- * Handle "Show technical details" button.
- * Returns flag to trigger technical view rendering.
+ * Handle "More details" button.
+ * Retrieves cached detailed answer and returns it for posting as a reply.
  */
-async function handleShowTechnical(
-  value: string,
-  userId: string
-): Promise<ActionResult> {
-  try {
-    const { requestId } = JSON.parse(value) as { requestId: string };
-
-    logger.info("Show technical requested", {
-      stage: "slack",
-      requestId,
-      userId,
-    });
-
-    // In a full implementation, we would:
-    // 1. Look up the cached pipeline result by requestId
-    // 2. Re-render with renderTechnical()
-    // 3. Return the updated blocks
-
-    // For now, just acknowledge
-    return {
-      success: true,
-      updateMessage: true,
-      // blocks would be populated from cache
-    };
-  } catch (err) {
-    logger.error("Failed to parse show_technical value", {
-      stage: "slack",
-      value,
-      error: err,
-    });
-    return { success: false, error: "Invalid action data" };
-  }
-}
-
-/**
- * Handle "Back to summary" button.
- */
-async function handleHideTechnical(
+async function handleShowMoreDetails(
   requestId: string,
   userId: string
 ): Promise<ActionResult> {
-  logger.info("Hide technical requested", {
+  logger.info("Show more details requested", {
     stage: "slack",
     requestId,
     userId,
   });
 
-  // Would re-render with renderNonTechnical()
+  const cached = getCachedAnswer(requestId);
+
+  if (!cached) {
+    logger.warn("No cached detailed answer found", {
+      stage: "slack",
+      requestId,
+    });
+    return {
+      success: false,
+      error: "Details no longer available. Please ask your question again.",
+    };
+  }
+
   return {
     success: true,
-    updateMessage: true,
+    detailedReply: {
+      text: cached.detailedAnswer,
+      threadTs: cached.threadTs,
+      channelId: cached.channelId,
+    },
   };
 }
 

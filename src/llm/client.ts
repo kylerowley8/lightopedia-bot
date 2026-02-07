@@ -6,7 +6,7 @@ import OpenAI from "openai";
 import { config } from "../config/env.js";
 import { logger } from "../lib/logger.js";
 
-const openai = new OpenAI({ apiKey: config.openai.apiKey });
+export const openai = new OpenAI({ apiKey: config.openai.apiKey });
 
 /**
  * LLM model configuration.
@@ -77,28 +77,55 @@ export async function analyzeImage(
     let imageContent: { type: "image_url"; image_url: { url: string } };
 
     if (options.authHeader) {
-      // Fetch image with auth and convert to base64
-      const response = await fetch(imageUrl, {
+      // Fetch image with auth - handle redirects manually because
+      // Authorization header gets stripped on cross-origin redirects
+      let finalResponse: Response;
+
+      // First request: check for redirect
+      const initialResponse = await fetch(imageUrl, {
         headers: { Authorization: options.authHeader },
-        redirect: "follow",
+        redirect: "manual",
       });
 
-      if (!response.ok) {
-        throw new Error(`Failed to fetch image: ${response.status}`);
+      if (initialResponse.status >= 300 && initialResponse.status < 400) {
+        // Redirect - Slack's redirect URL has auth baked in, so don't add header
+        const redirectUrl = initialResponse.headers.get("location");
+        if (!redirectUrl) {
+          throw new Error("Redirect without Location header");
+        }
+
+        logger.info("Following Slack redirect", {
+          stage: "llm",
+          status: initialResponse.status,
+          redirectUrl: redirectUrl.slice(0, 80),
+        });
+
+        // Follow redirect WITHOUT auth header (auth is in the URL)
+        finalResponse = await fetch(redirectUrl);
+      } else {
+        // No redirect, need to re-fetch with redirect: follow
+        finalResponse = await fetch(imageUrl, {
+          headers: { Authorization: options.authHeader },
+          redirect: "follow",
+        });
       }
 
-      const contentType = response.headers.get("content-type") || "";
+      if (!finalResponse.ok) {
+        throw new Error(`Failed to fetch image: ${finalResponse.status}`);
+      }
+
+      const contentType = finalResponse.headers.get("content-type") || "";
 
       logger.info("Fetched image from Slack", {
         stage: "llm",
         contentType,
-        status: response.status,
+        status: finalResponse.status,
         url: imageUrl.slice(0, 50),
       });
 
       // Validate it's actually an image
       if (!contentType.startsWith("image/")) {
-        const textPreview = await response.text();
+        const textPreview = await finalResponse.text();
         logger.error("Slack returned non-image content", {
           stage: "llm",
           contentType,
@@ -107,7 +134,7 @@ export async function analyzeImage(
         throw new Error(`Slack returned ${contentType} instead of image. Likely auth issue.`);
       }
 
-      const buffer = await response.arrayBuffer();
+      const buffer = await finalResponse.arrayBuffer();
       const base64 = Buffer.from(buffer).toString("base64");
 
       imageContent = {

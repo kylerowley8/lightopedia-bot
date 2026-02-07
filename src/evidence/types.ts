@@ -1,6 +1,6 @@
 // ============================================
-// Evidence Types — Core data structures for Lightopedia V1
-// V1 is DOCS-FIRST. Code tracing is out of scope.
+// Evidence Types — Single type system for Lightopedia
+// Help-articles are the single source of truth.
 // ============================================
 
 // ============================================
@@ -8,19 +8,11 @@
 // ============================================
 
 /**
- * Source type for indexed content.
- */
-export type SourceType = "repo" | "slack" | "code";
-
-/**
  * Versioning metadata stored with every chunk.
  * Enables replay, drift detection, and audit.
  */
 export type IndexMetadata = {
-  /** Source type */
-  sourceType: SourceType;
-
-  /** Repository slug (e.g., "light-space/light") */
+  /** Repository slug (e.g., "light-space/help-articles") */
   repoSlug?: string;
 
   /** File path within repo */
@@ -37,84 +29,32 @@ export type IndexMetadata = {
 
   /** Retrieval program version for replay */
   retrievalProgramVersion: string;
-
-  /** Slack thread permalink (for slack source) */
-  slackPermalink?: string;
 };
 
 /**
- * A chunk of documentation (markdown, notion, etc.)
+ * An article chunk from the help-articles repo.
  */
-export type DocChunk = {
+export type Article = {
   /** Unique chunk ID (for citation reference) */
   id: string;
 
-  /** Source identifier (e.g., "docs/billing.md") */
-  source: string;
+  /** File path (e.g., "getting-started/invoicing.md") */
+  path: string;
 
   /** Section heading if available */
   section?: string;
+
+  /** Human-readable title extracted from article */
+  title?: string;
 
   /** Text content */
   content: string;
 
   /** Similarity score from retrieval */
-  similarity: number;
+  score: number;
 
-  /** Versioning metadata */
-  metadata: IndexMetadata;
-};
-
-/**
- * A chunk of source code (Kotlin, TypeScript).
- * V3: Code is ground truth for implementation behavior.
- */
-export type CodeChunk = {
-  /** Unique chunk ID */
-  id: string;
-
-  /** File path (e.g., "src/billing/InvoiceService.kt") */
-  path: string;
-
-  /** Symbols in this chunk (class/function names) */
-  symbols: string[];
-
-  /** Line range */
-  startLine: number;
-  endLine: number;
-
-  /** Chunk type */
-  chunkType: "class" | "function" | "module" | "block";
-
-  /** Code content */
-  content: string;
-
-  /** Similarity score */
-  similarity: number;
-
-  /** Versioning metadata */
-  metadata: IndexMetadata;
-};
-
-/**
- * A curated Slack thread from #lightopedia.
- * Secondary evidence source for V1.
- */
-export type SlackThread = {
-  /** Unique thread ID */
-  id: string;
-
-  /** Thread permalink */
-  permalink: string;
-
-  /** Thread topic/title (first message summary) */
-  topic: string;
-
-  /** Combined thread content */
-  content: string;
-
-  /** Similarity score from retrieval */
-  similarity: number;
+  /** Repository slug */
+  repoSlug: string;
 
   /** Versioning metadata */
   metadata: IndexMetadata;
@@ -138,46 +78,32 @@ export type AttachmentEvidence = {
 };
 
 /**
+ * Retrieval metadata for debugging and replay.
+ */
+export type RetrievalMeta = {
+  /** Version of retrieval program used */
+  version: string;
+  /** Index run ID used */
+  indexRunId: string;
+  /** Total articles searched */
+  totalSearched: number;
+  /** Query variations used */
+  queriesUsed: string[];
+};
+
+/**
  * Complete evidence package for a query.
- * V3 hierarchy: Code > Docs > Slack
- * Code is ground truth, Docs are commitments, Slack is guidance.
+ * Single source: help articles.
  */
 export type EvidencePack = {
-  /** Source code evidence - ground truth for implementation (V3 primary) */
-  codeChunks: CodeChunk[];
-
-  /** Documentation evidence - customer commitments */
-  docs: DocChunk[];
-
-  /** Curated Slack threads from #lightopedia - internal guidance */
-  slackThreads: SlackThread[];
+  /** Help article evidence */
+  articles: Article[];
 
   /** User-provided attachments (optional) */
   attachments?: AttachmentEvidence[];
 
   /** Retrieval metadata for replay/debugging */
-  retrievalMeta: {
-    /** Version of retrieval program used */
-    version: string;
-    /** Index run ID used */
-    indexRunId: string;
-    /** Total chunks searched */
-    totalSearched: number;
-    /** Query variations used */
-    queriesUsed: string[];
-  };
-};
-
-/**
- * A claim with its supporting citations.
- * Every claim MUST have at least one citation (enforced by citation gate).
- */
-export type GroundedClaim = {
-  /** The claim text (no jargon for non-technical view) */
-  text: string;
-
-  /** Citations supporting this claim */
-  citations: Citation[];
+  retrievalMeta: RetrievalMeta;
 };
 
 /**
@@ -185,9 +111,9 @@ export type GroundedClaim = {
  */
 export type Citation = {
   /** Evidence type */
-  type: "code" | "docs" | "attachment";
+  type: "article" | "attachment";
 
-  /** Reference identifier (file path, doc source, etc.) */
+  /** Reference identifier (article path, etc.) */
   ref: string;
 
   /** Human-readable label for display */
@@ -196,77 +122,40 @@ export type Citation = {
 
 /**
  * Confidence levels for grounded answers.
- * No heuristics — purely based on evidence source.
  */
 export type ConfidenceLevel =
-  | "confirmed_implementation"  // Grounded in code
-  | "confirmed_docs"            // Grounded in documentation
-  | "needs_clarification";      // Insufficient evidence
-
-/**
- * V3 Answer structure - sales-safe, non-promissory format.
- * Follows the enforced Slack template structure.
- */
-export type V3Answer = {
-  /** 1 sentence direct answer with appropriate framing */
-  shortAnswer: string;
-
-  /** How Light models/thinks about this (1-2 sentences) */
-  conceptualModel: string;
-
-  /** Operational steps - how it works in practice */
-  howItWorks: string[];
-
-  /** Explicit boundaries - what Light does vs does not */
-  boundaries: {
-    whatLightDoes: string[];
-    whatLightDoesNot: string[];
-  };
-
-  /** One reusable line for customer conversations */
-  salesSummary: string;
-
-  /** Citation references (evidence indices) */
-  citations: string[];
-};
+  | "confirmed"              // Grounded in help articles
+  | "needs_clarification";   // Insufficient evidence
 
 /**
  * A fully grounded answer ready for rendering.
- * All claims have citations (enforced by citation gate).
+ * Validated by the citation gate at the summary/detailedAnswer level.
  */
 export type GroundedAnswer = {
   /** One-sentence summary (customer-ready) */
   summary: string;
 
-  /** Supporting claims with citations */
-  claims: GroundedClaim[];
+  /** Detailed answer shown when user clicks "More details" */
+  detailedAnswer?: string;
 
   /** Confidence based on evidence source */
   confidence: ConfidenceLevel;
 
-  /** Whether ambiguity was detected (triggers trace buttons) */
+  /** Whether ambiguity was detected */
   hasAmbiguity: boolean;
 
   /** Internal notes for follow-up (optional) */
   internalNotes?: string;
-
-  /** V3 structured answer (when available) */
-  v3?: V3Answer;
 };
 
 /**
  * Draft answer before citation gate.
- * May contain ungrounded claims that will be filtered.
  */
 export type DraftAnswer = {
   summary: string;
-  claims: Array<{
-    text: string;
-    citations: Citation[];
-  }>;
+  detailedAnswer?: string;
   suggestedConfidence: ConfidenceLevel;
   internalNotes?: string;
-  v3?: V3Answer;
 };
 
 // ============================================
@@ -284,16 +173,14 @@ export type CitationGateResult =
  * Current retrieval program version.
  * Bump when retrieval logic changes.
  */
-export const RETRIEVAL_VERSION = "retrieval.v1.0";
+export const RETRIEVAL_VERSION = "retrieval.v2.0";
 
 /**
  * Empty evidence pack factory.
  */
 export function createEmptyEvidencePack(indexRunId: string): EvidencePack {
   return {
-    codeChunks: [],
-    docs: [],
-    slackThreads: [],
+    articles: [],
     attachments: [],
     retrievalMeta: {
       version: RETRIEVAL_VERSION,
@@ -303,3 +190,26 @@ export function createEmptyEvidencePack(indexRunId: string): EvidencePack {
     },
   };
 }
+
+// ============================================
+// Retrieval Types
+// ============================================
+
+/** A retrieved chunk from the vector database */
+export interface RetrievedChunk {
+  chunkId: string;
+  content: string;
+  similarity: number;
+  metadata: ChunkMetadata;
+}
+
+/** Metadata stored with each chunk */
+export interface ChunkMetadata {
+  source: string;
+  documentId?: string;
+  chunkIndex?: number;
+  heading?: string;
+  commitSha?: string;
+  filePath?: string;
+}
+

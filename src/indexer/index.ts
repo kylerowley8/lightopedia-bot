@@ -1,11 +1,10 @@
 // ============================================
-// Indexer — V3 Entry Point
-// Routes to appropriate indexer based on file type
+// Indexer — Entry Point
+// Only indexes markdown docs from help-articles
 // ============================================
 
 import { indexDocument as indexDocDocument, indexRepo as indexDocRepo } from "./docsIndexer.js";
-import { indexCodeFile, indexCodeRepo } from "./codeIndexer.js";
-import { shouldIndexPath, isCodeFile, isDocFile } from "./config.js";
+import { shouldIndexPath, isDocFile } from "./config.js";
 import crypto from "crypto";
 
 export interface IndexResult {
@@ -16,7 +15,7 @@ export interface IndexResult {
 }
 
 /**
- * Index a single file (routes to docs or code indexer).
+ * Index a single file (docs only).
  */
 export async function indexDocument(
   repoFullName: string,
@@ -30,34 +29,22 @@ export async function indexDocument(
     return { chunksCreated: 0, skipped: true };
   }
 
+  if (!isDocFile(filePath)) {
+    console.log(`Skipping ${filePath} (not a doc file)`);
+    return { chunksCreated: 0, skipped: true };
+  }
+
   const indexRunId = options?.indexRunId || crypto.randomUUID();
 
-  if (isCodeFile(filePath)) {
-    const result = await indexCodeFile(
-      repoFullName,
-      filePath,
-      content,
-      commitSha,
-      indexRunId,
-      options
-    );
-    return { chunksCreated: result.chunksCreated, skipped: result.skipped };
-  }
-
-  if (isDocFile(filePath)) {
-    const result = await indexDocDocument(
-      repoFullName,
-      filePath,
-      content,
-      commitSha,
-      indexRunId,
-      options
-    );
-    return { chunksCreated: result.chunksCreated, skipped: result.skipped };
-  }
-
-  console.log(`Skipping ${filePath} (unknown file type)`);
-  return { chunksCreated: 0, skipped: true };
+  const result = await indexDocDocument(
+    repoFullName,
+    filePath,
+    content,
+    commitSha,
+    indexRunId,
+    options
+  );
+  return { chunksCreated: result.chunksCreated, skipped: result.skipped };
 }
 
 /**
@@ -77,13 +64,11 @@ export async function indexRepo(
     indexRunId,
   };
 
-  // Separate files by type
+  // Only doc files
   const docFiles = files.filter((f) => isDocFile(f.path) && shouldIndexPath(f.path));
-  const codeFiles = files.filter((f) => isCodeFile(f.path) && shouldIndexPath(f.path));
 
-  console.log(`\nIndexing ${docFiles.length} doc files and ${codeFiles.length} code files...`);
+  console.log(`\nIndexing ${docFiles.length} doc files...`);
 
-  // Index docs
   if (docFiles.length > 0) {
     const docResult = await indexDocRepo(repoFullName, docFiles, commitSha, options);
     result.documentsProcessed += docResult.documentsProcessed;
@@ -91,16 +76,8 @@ export async function indexRepo(
     result.errors.push(...docResult.errors);
   }
 
-  // Index code
-  if (codeFiles.length > 0) {
-    const codeResult = await indexCodeRepo(repoFullName, codeFiles, commitSha, options);
-    result.documentsProcessed += codeResult.filesProcessed;
-    result.chunksCreated += codeResult.chunksCreated;
-    result.errors.push(...codeResult.errors);
-  }
-
   return result;
 }
 
 // Re-export useful functions from config
-export { shouldIndexPath, isCodeFile, isDocFile } from "./config.js";
+export { shouldIndexPath, isDocFile } from "./config.js";

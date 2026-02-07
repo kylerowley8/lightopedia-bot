@@ -1,163 +1,143 @@
 // ============================================
-// Non-Technical Renderer — V3 Slack-Safe Template
+// Non-Technical Renderer — Slack-Safe Template
 // Ship-ready, non-promissory, copy-paste safe for customers
+// Supports inline citations [[n]](path) → Slack links
 // ============================================
 
 import type { SlackResponse, SlackBlock, SlackButton } from "../app/types.js";
 import type { PipelineResult } from "../app/types.js";
-import { buildCitationFooter } from "../grounding/citationGate.js";
+
+// Slack block text limit is 3000 characters
+const SLACK_TEXT_LIMIT = 3000;
+const TRUNCATION_BUFFER = 100; // Leave room for ellipsis and suffix
+
+// Base URL for help article links (articles are served from this path)
+const HELP_ARTICLES_BASE_URL = "https://help.lightplatform.com/articles";
 
 /**
- * Render a V3 Slack-safe response.
- *
- * Template (enforced structure):
- * 1. Short answer (1 sentence)
- * 2. Conceptual model (how Light thinks)
- * 3. How it works in practice (bulleted flow)
- * 4. Explicit boundaries (what Light does vs does not) - MANDATORY
- * 5. Sales-ready summary (1 sentence)
+ * Truncate text to fit within Slack's block text limit.
+ * Tries to break at a paragraph or sentence boundary.
  */
-export function renderNonTechnical(result: PipelineResult): SlackResponse {
-  const { answer, metadata, evidence } = result;
-  const blocks: SlackBlock[] = [];
-  const v3 = answer.v3;
-
-  // If we have V3 structured answer, use the new template
-  if (v3 && v3.shortAnswer) {
-    // 1. Short answer
-    blocks.push({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: v3.shortAnswer,
-      },
-    });
-
-    // 2. Conceptual model
-    if (v3.conceptualModel) {
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*How Light models this:*\n${v3.conceptualModel}`,
-        },
-      });
-    }
-
-    // 3. How it works in practice
-    if (v3.howItWorks.length > 0) {
-      const steps = v3.howItWorks.map((step) => `• ${step}`).join("\n");
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: `*In practice:*\n${steps}`,
-        },
-      });
-    }
-
-    // 4. Explicit boundaries (MANDATORY for V3)
-    if (v3.boundaries.whatLightDoes.length > 0 || v3.boundaries.whatLightDoesNot.length > 0) {
-      blocks.push({ type: "divider" });
-
-      if (v3.boundaries.whatLightDoes.length > 0) {
-        const does = v3.boundaries.whatLightDoes.map((item) => `✓ ${item}`).join("\n");
-        blocks.push({
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `*What Light does:*\n${does}`,
-          },
-        });
-      }
-
-      if (v3.boundaries.whatLightDoesNot.length > 0) {
-        const doesNot = v3.boundaries.whatLightDoesNot.map((item) => `✗ ${item}`).join("\n");
-        blocks.push({
-          type: "section",
-          text: {
-            type: "mrkdwn",
-            text: `*What Light does not:*\n${doesNot}`,
-          },
-        });
-      }
-    }
-
-    // 5. Sales-ready summary
-    if (v3.salesSummary) {
-      blocks.push({ type: "divider" });
-      blocks.push({
-        type: "context",
-        elements: [
-          {
-            type: "mrkdwn",
-            text: `💬 *Sales summary:* ${v3.salesSummary}`,
-          },
-        ],
-      });
-    }
-  } else {
-    // Fallback to legacy format if V3 not available
-    blocks.push({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: answer.summary,
-      },
-    });
-
-    if (answer.claims.length > 0) {
-      const bullets = answer.claims.map((claim) => `• ${claim.text}`).join("\n");
-      blocks.push({
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: bullets,
-        },
-      });
-    }
-
-    if (answer.internalNotes) {
-      blocks.push({ type: "divider" });
-      blocks.push({
-        type: "context",
-        elements: [
-          {
-            type: "mrkdwn",
-            text: `📝 *Internal note:* ${answer.internalNotes}`,
-          },
-        ],
-      });
-    }
+function truncateForSlack(text: string, maxLength: number = SLACK_TEXT_LIMIT - TRUNCATION_BUFFER): string {
+  if (text.length <= maxLength) {
+    return text;
   }
 
-  // Footer with confidence and source
-  const footer = buildCitationFooter(answer, evidence);
-  if (footer) {
+  // Try to break at a paragraph
+  const truncated = text.slice(0, maxLength);
+  const lastParagraph = truncated.lastIndexOf("\n\n");
+  if (lastParagraph > maxLength * 0.5) {
+    return truncated.slice(0, lastParagraph) + "\n\n_...response truncated. Ask a more specific question for details._";
+  }
+
+  // Try to break at a sentence
+  const lastSentence = truncated.lastIndexOf(". ");
+  if (lastSentence > maxLength * 0.5) {
+    return truncated.slice(0, lastSentence + 1) + "\n\n_...response truncated. Ask a more specific question for details._";
+  }
+
+  // Fall back to hard truncation
+  return truncated.slice(0, maxLength - 50) + "...\n\n_...response truncated._";
+}
+
+/**
+ * Transform inline citations [[n]](path) → Slack mrkdwn links.
+ * Converts [[1]](integrations/stripe.md) → <url|[1]>
+ */
+export function transformInlineCitations(text: string): string {
+  return text.replace(
+    /\[\[(\d+)\]\]\(([^)]+)\)/g,
+    (_match, num: string, path: string) => {
+      const url = `${HELP_ARTICLES_BASE_URL}/${path.replace(/\.md$/, "")}`;
+      return `<${url}|[${num}]>`;
+    }
+  );
+}
+
+/**
+ * Render a plain text Slack response.
+ * Shows answer with inline citations transformed to Slack links.
+ */
+export function renderNonTechnical(result: PipelineResult): SlackResponse {
+  const { answer, metadata } = result;
+  const blocks: SlackBlock[] = [];
+
+  // Transform inline citations to Slack links
+  let summaryText = transformInlineCitations(answer.summary);
+
+  // Truncate if needed for Slack's 3000 char limit
+  summaryText = truncateForSlack(summaryText);
+
+  blocks.push({
+    type: "section",
+    text: {
+      type: "mrkdwn",
+      text: summaryText,
+    },
+  });
+
+  if (answer.internalNotes) {
+    blocks.push({ type: "divider" });
     blocks.push({
       type: "context",
       elements: [
         {
           type: "mrkdwn",
-          text: footer,
+          text: truncateForSlack(`\u{1F4DD} *Internal note:* ${answer.internalNotes}`, 500),
         },
       ],
     });
   }
 
-  // Actions: feedback buttons
+  // Escalation block (when escalate_to_human was triggered)
+  if (result.escalation) {
+    blocks.push({ type: "divider" });
+    blocks.push({
+      type: "section",
+      text: {
+        type: "mrkdwn",
+        text: [
+          `\u{1F3AB} *Escalation Draft*`,
+          `*Title:* ${result.escalation.title}`,
+          `*Type:* ${result.escalation.requestType.replace(/_/g, " ")}`,
+          `*Details:* ${result.escalation.problemStatement}`,
+        ].join("\n"),
+      },
+    });
+  }
+
+  // Actions: feedback buttons + escalation submit
   const actions: SlackButton[] = [];
+
+  if (result.escalation) {
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "Submit to Linear" },
+      action_id: "submit_escalation",
+      value: JSON.stringify({
+        requestId: metadata.requestId,
+        ...result.escalation,
+      }),
+      style: "primary",
+    });
+    actions.push({
+      type: "button",
+      text: { type: "plain_text", text: "Cancel" },
+      action_id: "cancel_escalation",
+      value: metadata.requestId,
+    });
+  }
 
   actions.push({
     type: "button",
-    text: { type: "plain_text", text: "✓ Helpful" },
+    text: { type: "plain_text", text: "\u2713 Helpful" },
     action_id: "feedback_helpful",
     value: metadata.requestId,
   });
 
   actions.push({
     type: "button",
-    text: { type: "plain_text", text: "✗ Not helpful" },
+    text: { type: "plain_text", text: "\u2717 Not helpful" },
     action_id: "feedback_not_helpful",
     value: metadata.requestId,
   });
@@ -179,7 +159,7 @@ export function renderNonTechnical(result: PipelineResult): SlackResponse {
   });
 
   return {
-    text: v3?.shortAnswer || answer.summary,
+    text: answer.summary.slice(0, 150),
     blocks,
   };
 }
