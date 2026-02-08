@@ -1,21 +1,21 @@
 // ============================================
 // Agentic Loop — Tool-use pipeline with GPT-4o
-// Max 3 iterations, then final synthesis without tools
+// Two-phase: agentic tools → clean synthesis
 // ============================================
 
 import crypto from "crypto";
 import { openai, SYNTHESIS_MODEL } from "../llm/client.js";
 import {
   AGENTIC_SYSTEM_PROMPT,
+  FINAL_ANSWER_PROMPT,
   buildUserContextPrompt,
   buildThreadContextPrompt,
   buildAttachmentContext,
   getMissingContextMessage,
   type UserContext,
 } from "../llm/prompts.js";
-import { AGENT_TOOLS, executeTool, type EscalationDraft } from "./tools.js";
+import { AGENT_TOOLS, executeTool, type ToolResult, type EscalationDraft } from "./tools.js";
 import { checkForbiddenPhrases } from "../grounding/forbiddenPhrases.js";
-import { validateInlineCitations } from "../grounding/citationGate.js";
 import { extractAttachmentText } from "../attachments/extractText.js";
 import { logger } from "../lib/logger.js";
 import type { SlackInput, PipelineResult } from "../app/types.js";
@@ -32,7 +32,7 @@ import type {
 // ============================================
 
 const MAX_ITERATIONS = 5;
-export const PIPELINE_VERSION = "pipeline.v3.0-agentic";
+export const PIPELINE_VERSION = "pipeline.v3.1-agentic";
 
 // ============================================
 // Types
@@ -51,16 +51,20 @@ export interface AgenticPipelineInput {
 /**
  * Execute the agentic pipeline for a question.
  *
- * Flow:
- * 1. Build system prompt (base + user context + thread context)
- * 2. Run tool-use loop (max 3 iterations)
- *    - LLM calls list_articles → gets manifest
- *    - LLM calls fetch_articles → gets full content
- *    - (optional) LLM calls more tools or escalate_to_human
- * 3. Final answer from LLM (no tools)
- * 4. Apply forbidden phrases guardrail
- * 5. Validate inline citations
- * 6. Return PipelineResult
+ * Two-phase flow:
+ * Phase 1 — Tool-use loop (max 5 iterations):
+ *   - LLM calls knowledge_base → gets curated hierarchy (136 articles)
+ *   - LLM calls fetch_articles → gets full content via Firecrawl/GitHub
+ *   - (optional) LLM calls search_articles or escalate_to_human
+ *
+ * Phase 2 — Clean synthesis:
+ *   - Extract article content from tool results
+ *   - Build clean prompt with ONLY article content + user question
+ *   - LLM generates final answer with inline citations (no tool history)
+ *
+ * Post-processing:
+ *   - Apply forbidden phrases guardrail
+ *   - Format for Slack
  */
 export async function executeAgenticPipeline(
   pipelineInput: AgenticPipelineInput
@@ -78,9 +82,9 @@ export async function executeAgenticPipeline(
     hasUserContext: !!userContext,
   });
 
-  // Track fetched article paths for citation validation
-  const fetchedPaths = new Set<string>();
-  const fetchedArticles: Article[] = [];
+  // Track fetched articles for two-phase synthesis
+  const allArticles: Array<{ title: string; url: string; content: string }> = [];
+  const fetchedUrls = new Set<string>();
   let escalation: EscalationDraft | undefined;
 
   // Build system prompt
@@ -108,10 +112,8 @@ export async function executeAgenticPipeline(
   ];
 
   // ============================================
-  // Tool-Use Loop
+  // Phase 1: Tool-Use Loop
   // ============================================
-
-  let finalAnswer = "";
 
   for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
     logger.info("Agentic loop iteration", {
@@ -145,7 +147,6 @@ export async function executeAgenticPipeline(
 
     // If the LLM wants to use tools
     if (choice.finish_reason === "tool_calls" && assistantMessage.tool_calls) {
-      // Filter to function tool calls only (not custom tool calls)
       const functionToolCalls = assistantMessage.tool_calls.filter(
         (tc): tc is typeof tc & { type: "function"; function: { name: string; arguments: string } } =>
           tc.type === "function"
@@ -174,13 +175,19 @@ export async function executeAgenticPipeline(
           });
         }
 
-        const result = await executeTool(toolName, args, requestId);
+        const result: ToolResult = await executeTool(toolName, args, requestId);
 
-        // Track fetched paths for citation validation
-        if (result.fetchedPaths) {
-          for (const p of result.fetchedPaths) {
-            fetchedPaths.add(p);
+        // Track fetched articles for phase 2 synthesis
+        if (result.articles) {
+          for (const article of result.articles) {
+            if (!fetchedUrls.has(article.url)) {
+              fetchedUrls.add(article.url);
+              allArticles.push(article);
+            }
           }
+        }
+        if (result.fetchedUrls) {
+          for (const u of result.fetchedUrls) fetchedUrls.add(u);
         }
 
         // Track escalation
@@ -200,14 +207,59 @@ export async function executeAgenticPipeline(
       continue; // Next iteration with tool results
     }
 
-    // LLM is done with tools — this is the final answer
-    finalAnswer = assistantMessage.content ?? "";
+    // LLM is done with tools — break out of loop
     break;
   }
 
-  // If we exhausted iterations without a final answer, make one more call without tools
-  if (!finalAnswer) {
-    logger.info("Making final synthesis call without tools", {
+  // ============================================
+  // Phase 2: Clean Synthesis (no tool history)
+  // ============================================
+
+  let finalAnswer = "";
+
+  if (allArticles.length > 0) {
+    // Build clean context from fetched articles
+    const retrievedContent = allArticles.map(
+      (a) => `## ${a.title}\nSource: ${a.url}\n\n${a.content}`
+    );
+
+    const cleanMessages: ChatCompletionMessageParam[] = [
+      { role: "system", content: FINAL_ANSWER_PROMPT },
+      // Include thread history for context
+      ...threadHistory.slice(-4).map(
+        (m): ChatCompletionMessageParam => ({
+          role: m.role,
+          content: m.content.slice(0, 300),
+        })
+      ),
+      {
+        role: "user",
+        content: `Here is the relevant documentation I found for the question:\n\n${retrievedContent.join("\n\n---\n\n")}\n\n---\n\nBased on this documentation, please answer: "${input.text}"`,
+      },
+    ];
+
+    logger.info("Phase 2: Clean synthesis", {
+      stage: "pipeline",
+      requestId,
+      articleCount: allArticles.length,
+    });
+
+    const finalResponse = await openai.chat.completions.create({
+      model: SYNTHESIS_MODEL,
+      messages: cleanMessages,
+      temperature: 0.3,
+      max_tokens: 2000,
+    });
+
+    finalAnswer = finalResponse.choices[0]?.message?.content ?? "";
+  } else if (escalation) {
+    // Escalation path — use the last assistant message as the answer
+    const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant");
+    finalAnswer =
+      (lastAssistant && "content" in lastAssistant ? (lastAssistant.content as string) : null) ?? "";
+  } else {
+    // No articles found, no escalation — make a final call without tools
+    logger.info("No articles found, making final synthesis without tools", {
       stage: "pipeline",
       requestId,
     });
@@ -240,27 +292,15 @@ export async function executeAgenticPipeline(
     finalAnswer = phraseCheck.cleanedText;
   }
 
-  // Validate inline citations
-  const citationResult = validateInlineCitations(finalAnswer, fetchedPaths);
-
-  if (!citationResult.isValid) {
-    logger.warn("Invalid citations found", {
-      stage: "pipeline",
-      requestId,
-      invalidPaths: citationResult.invalidPaths,
-    });
-  }
-
   // Build result
   const latencyMs = Date.now() - startTime;
 
-  // Handle escalation or no-article fallback
-  const hasContent = fetchedPaths.size > 0 || finalAnswer.length > 0;
+  const hasContent = fetchedUrls.size > 0 || finalAnswer.length > 0;
 
   const answer: GroundedAnswer = hasContent
     ? {
         summary: finalAnswer,
-        confidence: fetchedPaths.size > 0 ? "confirmed" : "needs_clarification",
+        confidence: fetchedUrls.size > 0 ? "confirmed" : "needs_clarification",
         hasAmbiguity: false,
       }
     : {
@@ -269,15 +309,13 @@ export async function executeAgenticPipeline(
         hasAmbiguity: false,
       };
 
-  // Build a minimal evidence pack for backward compat with renderer
-  // The articles are tracked for "More details" and citation footer
   const evidence = {
-    articles: fetchedArticles,
+    articles: [] as Article[],
     retrievalMeta: {
       version: PIPELINE_VERSION,
       indexRunId: requestId,
-      totalSearched: fetchedPaths.size,
-      queriesUsed: [...fetchedPaths],
+      totalSearched: fetchedUrls.size,
+      queriesUsed: [...fetchedUrls],
     },
   };
 
@@ -286,7 +324,7 @@ export async function executeAgenticPipeline(
     requestId,
     latencyMs,
     iterations: messages.filter((m) => m.role === "assistant").length,
-    articlesFetched: fetchedPaths.size,
+    articlesFetched: fetchedUrls.size,
     hasEscalation: !!escalation,
     answerLength: finalAnswer.length,
   });

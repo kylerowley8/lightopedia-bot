@@ -1,10 +1,11 @@
 // ============================================
-// Tests for LLM Prompts (Agentic)
+// Tests for LLM Prompts (Two-Phase Agentic)
 // ============================================
 
 import { describe, it, expect } from "vitest";
 import {
   AGENTIC_SYSTEM_PROMPT,
+  FINAL_ANSWER_PROMPT,
   buildUserContextPrompt,
   buildThreadContextPrompt,
   buildAttachmentContext,
@@ -12,7 +13,7 @@ import {
 } from "../src/llm/prompts.js";
 
 // ============================================
-// AGENTIC_SYSTEM_PROMPT
+// AGENTIC_SYSTEM_PROMPT (Phase 1: Tool-use)
 // ============================================
 
 describe("AGENTIC_SYSTEM_PROMPT", () => {
@@ -20,45 +21,17 @@ describe("AGENTIC_SYSTEM_PROMPT", () => {
     expect(AGENTIC_SYSTEM_PROMPT).toContain("Lightopedia");
   });
 
-  it("includes help articles as knowledge source", () => {
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("help articles");
-  });
-
   it("includes tool usage instructions", () => {
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("list_articles");
+    expect(AGENTIC_SYSTEM_PROMPT).toContain("knowledge_base");
     expect(AGENTIC_SYSTEM_PROMPT).toContain("fetch_articles");
+    expect(AGENTIC_SYSTEM_PROMPT).toContain("search_articles");
     expect(AGENTIC_SYSTEM_PROMPT).toContain("escalate_to_human");
   });
 
-  it("includes inline citation instructions", () => {
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("[[n]](article-path)");
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("Inline Citations");
-  });
-
-  it("includes forbidden language section", () => {
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("Forbidden Language");
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("Automatically");
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("Out of the box");
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("Seamlessly");
-  });
-
-  it("includes approved language patterns", () => {
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("Approved Language");
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("Light supports this workflow by");
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("Light is designed to handle");
-  });
-
-  it("includes critical terminology for AR vs AP", () => {
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("Accounts Receivable");
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("Accounts Payable");
-  });
-
-  it("does NOT reference code structures as knowledge source", () => {
-    const knowledgeSection = AGENTIC_SYSTEM_PROMPT.slice(
-      AGENTIC_SYSTEM_PROMPT.indexOf("## Knowledge Source"),
-      AGENTIC_SYSTEM_PROMPT.indexOf("## User Attachments")
-    );
-    expect(knowledgeSection).not.toContain("code");
+  it("describes the workflow", () => {
+    expect(AGENTIC_SYSTEM_PROMPT).toContain("Your Workflow");
+    expect(AGENTIC_SYSTEM_PROMPT).toContain("Call knowledge_base");
+    expect(AGENTIC_SYSTEM_PROMPT).toContain("fetch_articles exactly ONCE");
   });
 
   it("includes user attachment handling instructions", () => {
@@ -66,9 +39,50 @@ describe("AGENTIC_SYSTEM_PROMPT", () => {
     expect(AGENTIC_SYSTEM_PROMPT).toContain("PRIMARY CONTEXT");
   });
 
+  it("instructs to stop after fetching articles", () => {
+    expect(AGENTIC_SYSTEM_PROMPT).toContain("stop calling tools");
+  });
+});
+
+// ============================================
+// FINAL_ANSWER_PROMPT (Phase 2: Clean synthesis)
+// ============================================
+
+describe("FINAL_ANSWER_PROMPT", () => {
+  it("mentions Lightopedia as the assistant name", () => {
+    expect(FINAL_ANSWER_PROMPT).toContain("Lightopedia");
+  });
+
+  it("includes inline citation instructions with URL format", () => {
+    expect(FINAL_ANSWER_PROMPT).toContain("[[1]](url)");
+    expect(FINAL_ANSWER_PROMPT).toContain("Citation Format");
+  });
+
+  it("includes forbidden language section", () => {
+    expect(FINAL_ANSWER_PROMPT).toContain("Forbidden Language");
+    expect(FINAL_ANSWER_PROMPT).toContain("Automatically");
+    expect(FINAL_ANSWER_PROMPT).toContain("Out of the box");
+    expect(FINAL_ANSWER_PROMPT).toContain("Seamlessly");
+  });
+
+  it("includes approved language patterns", () => {
+    expect(FINAL_ANSWER_PROMPT).toContain("Approved Language");
+    expect(FINAL_ANSWER_PROMPT).toContain("Light supports this workflow by");
+    expect(FINAL_ANSWER_PROMPT).toContain("Light is designed to handle");
+  });
+
+  it("includes critical terminology for AR vs AP", () => {
+    expect(FINAL_ANSWER_PROMPT).toContain("Accounts Receivable");
+    expect(FINAL_ANSWER_PROMPT).toContain("Accounts Payable");
+  });
+
   it("specifies Slack-compatible markdown format", () => {
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("single asterisks");
-    expect(AGENTIC_SYSTEM_PROMPT).toContain("NEVER use **double asterisks**");
+    expect(FINAL_ANSWER_PROMPT).toContain("single asterisks");
+    expect(FINAL_ANSWER_PROMPT).toContain("NEVER use **double asterisks**");
+  });
+
+  it("includes product boundary rule", () => {
+    expect(FINAL_ANSWER_PROMPT).toContain("Product Boundary Rule");
   });
 });
 
@@ -145,7 +159,6 @@ describe("buildThreadContextPrompt", () => {
 
     const result = buildThreadContextPrompt(history);
 
-    // Should contain messages 2-5 (last 4), not 0-1
     expect(result).not.toContain("Message 0");
     expect(result).not.toContain("Message 1");
     expect(result).toContain("Message 2");
@@ -158,7 +171,6 @@ describe("buildThreadContextPrompt", () => {
       { role: "user", content: longContent },
     ]);
 
-    // The content should be truncated
     const aCount = (result.match(/A/g) || []).length;
     expect(aCount).toBe(300);
   });

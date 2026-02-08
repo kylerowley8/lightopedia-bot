@@ -25,6 +25,9 @@ const envSchema = z.object({
   // OpenAI
   OPENAI_API_KEY: z.string().min(1, "OPENAI_API_KEY is required"),
 
+  // Firecrawl (optional - for live article scraping)
+  FIRECRAWL_API_KEY: z.string().optional(),
+
   // GitHub (optional - only needed if using GitHub webhook)
   GITHUB_WEBHOOK_SECRET: z.string().optional(),
   GITHUB_APP_ID: z.string().optional(),
