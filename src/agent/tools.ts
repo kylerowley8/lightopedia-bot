@@ -4,7 +4,7 @@
 // ============================================
 
 import type { ChatCompletionTool } from "openai/resources/chat/completions.js";
-import { fetchKBHierarchy, githubBlobToRaw } from "../retrieval/manifest.js";
+import { fetchKBHierarchy, githubBlobToRaw, githubBlobToHelpUrl } from "../retrieval/manifest.js";
 import { searchArticlesBySimilarity } from "../retrieval/search.js";
 import { logger } from "../lib/logger.js";
 
@@ -343,11 +343,7 @@ async function fetchArticle(url: string): Promise<FetchedArticle> {
       // Convert GitHub blob URL to help.light.inc URL for Firecrawl
       let scrapeUrl = targetUrl;
       if (targetUrl.includes("github.com/light-space/help-articles")) {
-        // Extract article slug from GitHub URL
-        const match = targetUrl.match(/\/articles\/[^/]+\/[\d-]+(.+)\.md$/);
-        if (match) {
-          scrapeUrl = `https://help.light.inc/knowledge/${match[1]}`;
-        }
+        scrapeUrl = githubBlobToHelpUrl(targetUrl);
       }
 
       logger.info("Fetching article via Firecrawl", {
@@ -383,7 +379,7 @@ async function fetchArticle(url: string): Promise<FetchedArticle> {
             title,
             length: content.length,
           });
-          return { content, title, url: scrapeUrl };
+          return { content, title, url: targetUrl };
         }
       }
     } catch (err) {

@@ -11,9 +11,6 @@ import type { PipelineResult } from "../app/types.js";
 const SLACK_TEXT_LIMIT = 3000;
 const TRUNCATION_BUFFER = 100; // Leave room for ellipsis and suffix
 
-// Base URL for help article links (articles are served from this path)
-const HELP_ARTICLES_BASE_URL = "https://help.lightplatform.com/articles";
-
 /**
  * Truncate text to fit within Slack's block text limit.
  * Tries to break at a paragraph or sentence boundary.
@@ -41,14 +38,14 @@ function truncateForSlack(text: string, maxLength: number = SLACK_TEXT_LIMIT - T
 }
 
 /**
- * Transform inline citations [[n]](path) → Slack mrkdwn links.
- * Converts [[1]](integrations/stripe.md) → <url|[1]>
+ * Transform inline citations [[n]](url) → Slack mrkdwn links.
+ * The LLM generates citations with full URLs from article Source lines.
+ * Converts [[1]](https://help.light.inc/knowledge-base/article) → <url|[1]>
  */
 export function transformInlineCitations(text: string): string {
   return text.replace(
     /\[\[(\d+)\]\]\(([^)]+)\)/g,
-    (_match, num: string, path: string) => {
-      const url = `${HELP_ARTICLES_BASE_URL}/${path.replace(/\.md$/, "")}`;
+    (_match, num: string, url: string) => {
       return `<${url}|[${num}]>`;
     }
   );

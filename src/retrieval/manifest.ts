@@ -102,15 +102,18 @@ export function githubBlobToRaw(url: string): string {
 }
 
 /**
- * Convert a GitHub blob URL to a help.light.inc URL for citations.
+ * Convert a GitHub blob URL to a help.light.inc URL.
  * e.g., https://github.com/light-space/help-articles/blob/main/articles/08-expense-management/8-11-virtual-cards.md
- *   ->  https://help.light.inc/knowledge/virtual-cards
+ *   ->  https://help.light.inc/knowledge-base/virtual-cards
+ *
+ * Note: The slug mapping is approximate — help site slugs don't always match
+ * the GitHub filenames. This is used for Firecrawl scraping attempts.
  */
 export function githubBlobToHelpUrl(url: string): string {
   // Extract the filename part and clean it
   const match = url.match(/\/articles\/[^/]+\/[\d-]+(.+)\.md$/);
   if (match) {
-    return `https://help.light.inc/knowledge/${match[1]}`;
+    return `https://help.light.inc/knowledge-base/${match[1]}`;
   }
   return url;
 }
