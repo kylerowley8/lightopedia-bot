@@ -5,7 +5,7 @@
 
 import type { ChatCompletionTool } from "openai/resources/chat/completions.js";
 import { generateManifest } from "../retrieval/manifest.js";
-import { fetchArticlesByPath } from "../retrieval/search.js";
+import { fetchArticlesByPath, searchArticlesBySimilarity } from "../retrieval/search.js";
 import { logger } from "../lib/logger.js";
 
 // ============================================
@@ -52,7 +52,7 @@ export const AGENT_TOOLS: ChatCompletionTool[] = [
     function: {
       name: "escalate_to_human",
       description:
-        "Escalate the question to a human when the help articles don't cover the topic, or the user needs hands-on support. Creates a structured ticket draft for the support team.",
+        "Escalate the question to a human when the help articles don't cover the topic, or the user needs hands-on support. Creates a structured ticket draft for the support team. IMPORTANT: Only use this AFTER trying both list_articles AND search_articles — never escalate without searching first.",
       parameters: {
         type: "object",
         properties: {
@@ -71,6 +71,25 @@ export const AGENT_TOOLS: ChatCompletionTool[] = [
           },
         },
         required: ["title", "requestType", "problemStatement"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_articles",
+      description:
+        "Search help articles by semantic similarity. Use this when you can't find relevant articles by title in the manifest, or when the user's question uses different terminology than the article titles. This searches the full content of all articles using AI embeddings. Returns the most relevant articles with similarity scores.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: {
+            type: "string",
+            description:
+              "Natural language search query describing what you're looking for. Be specific and include key concepts from the user's question.",
+          },
+        },
+        required: ["query"],
       },
     },
   },
@@ -109,6 +128,8 @@ export async function executeTool(
       return executeFetchArticles(args, requestId);
     case "escalate_to_human":
       return executeEscalateToHuman(args, requestId);
+    case "search_articles":
+      return executeSearchArticles(args, requestId);
     default:
       logger.warn("Unknown tool called", {
         stage: "pipeline",
@@ -226,4 +247,51 @@ async function executeEscalateToHuman(
   ].join("\n");
 
   return { content, escalation };
+}
+
+async function executeSearchArticles(
+  args: Record<string, unknown>,
+  requestId: string
+): Promise<ToolResult> {
+  const query = (args["query"] as string) ?? "";
+
+  if (!query) {
+    return { content: "No search query provided." };
+  }
+
+  logger.info("Executing search_articles", {
+    stage: "pipeline",
+    requestId,
+    query: query.slice(0, 80),
+  });
+
+  const articles = await searchArticlesBySimilarity(query, 8);
+
+  if (articles.length === 0) {
+    return {
+      content: "No relevant articles found for this search query.",
+      fetchedPaths: [],
+    };
+  }
+
+  // Format results with content and similarity scores
+  const sections = articles.map((article, i) => {
+    const label = article.title || article.path;
+    const score = (article.score * 100).toFixed(0);
+    return `=== Result ${i + 1}: ${label} (${article.path}) [${score}% match] ===\n\n${article.content}`;
+  });
+
+  const content = `Found ${articles.length} relevant articles:\n\n${sections.join("\n\n---\n\n")}`;
+
+  logger.info("search_articles complete", {
+    stage: "pipeline",
+    requestId,
+    resultCount: articles.length,
+    topScore: articles[0]?.score,
+  });
+
+  return {
+    content,
+    fetchedPaths: articles.map((a) => a.path),
+  };
 }
