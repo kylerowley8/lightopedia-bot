@@ -223,10 +223,16 @@ export async function executeAgenticPipeline(
       (a) => `## ${a.title}\nSource: ${a.url}\n\n${a.content}`
     );
 
+    // Always preserve the first message (thread parent / original question)
+    const selectedHistory =
+      threadHistory.length > 4
+        ? [threadHistory[0]!, ...threadHistory.slice(-3)]
+        : threadHistory;
+
     const cleanMessages: ChatCompletionMessageParam[] = [
       { role: "system", content: FINAL_ANSWER_PROMPT },
-      // Include thread history for context
-      ...threadHistory.slice(-4).map(
+      // Include thread history for context (parent always preserved)
+      ...selectedHistory.map(
         (m): ChatCompletionMessageParam => ({
           role: m.role,
           content: m.content.slice(0, 300),

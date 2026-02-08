@@ -39,6 +39,12 @@ describe("AGENTIC_SYSTEM_PROMPT", () => {
     expect(AGENTIC_SYSTEM_PROMPT).toContain("PRIMARY CONTEXT");
   });
 
+  it("includes thread context instructions for reply-based mentions", () => {
+    expect(AGENTIC_SYSTEM_PROMPT).toContain("Thread Context");
+    expect(AGENTIC_SYSTEM_PROMPT).toContain("Previous Conversation");
+    expect(AGENTIC_SYSTEM_PROMPT).toContain("original question");
+  });
+
   it("instructs to stop after fetching articles", () => {
     expect(AGENTIC_SYSTEM_PROMPT).toContain("stop calling tools");
   });
@@ -83,6 +89,12 @@ describe("FINAL_ANSWER_PROMPT", () => {
 
   it("includes product boundary rule", () => {
     expect(FINAL_ANSWER_PROMPT).toContain("Product Boundary Rule");
+  });
+
+  it("includes workflow examples instructions", () => {
+    expect(FINAL_ANSWER_PROMPT).toContain("Workflow Examples");
+    expect(FINAL_ANSWER_PROMPT).toContain("step-by-step");
+    expect(FINAL_ANSWER_PROMPT).toContain("realistic scenario");
   });
 });
 
@@ -151,7 +163,7 @@ describe("buildThreadContextPrompt", () => {
     expect(result).toContain("Assistant: Billing in Light works by...");
   });
 
-  it("limits to last 4 messages", () => {
+  it("preserves parent (first message) and last 3 when truncating beyond 4", () => {
     const history = Array.from({ length: 6 }, (_, i) => ({
       role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
       content: `Message ${i}`,
@@ -159,10 +171,49 @@ describe("buildThreadContextPrompt", () => {
 
     const result = buildThreadContextPrompt(history);
 
-    expect(result).not.toContain("Message 0");
+    // Parent (Message 0) is always preserved
+    expect(result).toContain("Message 0");
+    // Middle messages are dropped
     expect(result).not.toContain("Message 1");
-    expect(result).toContain("Message 2");
+    expect(result).not.toContain("Message 2");
+    // Last 3 are kept
+    expect(result).toContain("Message 3");
+    expect(result).toContain("Message 4");
     expect(result).toContain("Message 5");
+  });
+
+  it("preserves parent even with 10+ messages in history", () => {
+    const history = Array.from({ length: 12 }, (_, i) => ({
+      role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+      content: `Message ${i}`,
+    }));
+
+    const result = buildThreadContextPrompt(history);
+
+    // Parent is always first
+    expect(result).toContain("Message 0");
+    // Last 3 are kept
+    expect(result).toContain("Message 9");
+    expect(result).toContain("Message 10");
+    expect(result).toContain("Message 11");
+    // Middle messages are dropped
+    expect(result).not.toMatch(/Message 1\b/);
+    expect(result).not.toMatch(/Message 5\b/);
+    expect(result).not.toMatch(/Message 8\b/);
+  });
+
+  it("keeps all messages when 4 or fewer", () => {
+    const history = Array.from({ length: 4 }, (_, i) => ({
+      role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+      content: `Message ${i}`,
+    }));
+
+    const result = buildThreadContextPrompt(history);
+
+    expect(result).toContain("Message 0");
+    expect(result).toContain("Message 1");
+    expect(result).toContain("Message 2");
+    expect(result).toContain("Message 3");
   });
 
   it("truncates long messages to 300 characters", () => {

@@ -213,8 +213,17 @@ async function fetchThreadHistoryWithFiles(
     // Sort history by timestamp (oldest first)
     history.sort((a, b) => parseFloat(a.timestamp) - parseFloat(b.timestamp));
 
+    // Always preserve the parent (thread root) message — it's the oldest and
+    // often contains the actual question being discussed in the thread.
+    let trimmedHistory: ThreadHistoryMessage[];
+    if (history.length > 6) {
+      trimmedHistory = [history[0]!, ...history.slice(-(6 - 1))];
+    } else {
+      trimmedHistory = history;
+    }
+
     return {
-      history: history.slice(-6),
+      history: trimmedHistory,
       files,
     };
   } catch (err) {
