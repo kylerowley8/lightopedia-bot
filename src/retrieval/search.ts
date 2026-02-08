@@ -114,7 +114,7 @@ interface MatchDocsRow {
   similarity: number;
 }
 
-const MIN_SIMILARITY = 0.2;
+const MIN_SIMILARITY = 0.15;
 
 /**
  * Search articles by semantic similarity using vector embeddings.
@@ -134,7 +134,7 @@ export async function searchArticlesBySimilarity(
 
   const { data, error } = await supabase.rpc("match_docs", {
     query_embedding: queryEmbedding,
-    match_count: maxResults * 3, // fetch extra chunks to group by path
+    match_count: maxResults * 4, // fetch extra chunks to group by path
   });
 
   if (error) {

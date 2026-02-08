@@ -31,7 +31,7 @@ import type {
 // Configuration
 // ============================================
 
-const MAX_ITERATIONS = 3;
+const MAX_ITERATIONS = 5;
 export const PIPELINE_VERSION = "pipeline.v3.0-agentic";
 
 // ============================================
